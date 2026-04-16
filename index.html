@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smithers Toys — WebGL Gallery</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a0a; color: #e0e0e0; font-family: 'SF Mono', 'Fira Code', monospace; }
+#bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; }
+.content { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+h1 { font-size: 3rem; font-weight: 300; letter-spacing: 0.3em; text-transform: uppercase; color: #00d2a0; margin-bottom: 0.5em; }
+p { font-size: 0.9rem; opacity: 0.5; letter-spacing: 0.1em; }
+.gallery { margin-top: 3em; display: flex; gap: 1.5em; flex-wrap: wrap; justify-content: center; }
+.card { width: 280px; height: 180px; border: 1px solid rgba(0,210,160,0.2); border-radius: 8px; overflow: hidden; position: relative; background: #111; transition: border-color 0.3s; }
+.card:hover { border-color: rgba(0,210,160,0.6); }
+.card canvas { width: 100%; height: 100%; }
+.card .label { position: absolute; bottom: 0; left: 0; right: 0; padding: 8px 12px; background: rgba(0,0,0,0.7); font-size: 0.7rem; letter-spacing: 0.05em; }
+a { color: #00d2a0; text-decoration: none; }
+a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div class="content">
+  <h1>Smithers Toys</h1>
+  <p>WebGL experiments, generated and validated by AI workflows</p>
+  <div class="gallery">
+    <a href="demos/001-mandelbrot/index.html" class="card">
+      <canvas id="preview1"></canvas>
+      <div class="label">001 — Mandelbrot Zoom</div>
+    </a>
+  </div>
+</div>
+
+<script id="bg-vs" type="x-shader/x-vertex">
+attribute vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
+</script>
+<script id="bg-fs" type="x-shader/x-fragment">
+precision highp float;
+uniform float u_time;
+uniform vec2 u_res;
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+  float t = u_time * 0.15;
+  vec3 col = vec3(0.02, 0.03, 0.04);
+  float d = length(uv - 0.5);
+  col += vec3(0.0, 0.12, 0.09) * (0.5 - d) * 0.4;
+  col += 0.008 * sin(uv.y * 80.0 + t * 3.0);
+  gl_FragColor = vec4(col, 1.0);
+}
+</script>
+
+<script>
+function initBg() {
+  const c = document.getElementById('bg');
+  const gl = c.getContext('webgl');
+  if (!gl) return;
+
+  function resize() { c.width = innerWidth; c.height = innerHeight; gl.viewport(0,0,c.width,c.height); }
+  resize(); addEventListener('resize', resize);
+
+  function compile(type, src) {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s;
+  }
+  const vs = compile(gl.VERTEX_SHADER, document.getElementById('bg-vs').textContent);
+  const fs = compile(gl.FRAGMENT_SHADER, document.getElementById('bg-fs').textContent);
+  const p = gl.createProgram(); gl.attachShader(p,vs); gl.attachShader(p,fs); gl.linkProgram(p); gl.useProgram(p);
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+  const a = gl.getAttribLocation(p,'a_pos');
+  gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
+
+  const uTime = gl.getUniformLocation(p,'u_time');
+  const uRes = gl.getUniformLocation(p,'u_res');
+
+  function frame(t) {
+    gl.uniform1f(uTime, t*0.001);
+    gl.uniform2f(uRes, c.width, c.height);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+initBg();
+</script>
+</body>
+</html>

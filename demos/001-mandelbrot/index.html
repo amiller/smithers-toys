@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>001 — Mandelbrot Zoom</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; }
+canvas { width: 100vw; height: 100vh; display: block; }
+.info { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.4); font: 11px monospace; letter-spacing: 0.05em; z-index: 1; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="info">scroll to zoom · drag to pan · r to reset</div>
+<script>
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl');
+
+const VS = `attribute vec2 a_pos; void main(){gl_Position=vec4(a_pos,0.0,1.0);}`;
+
+const FS = `
+precision highp float;
+uniform vec2 u_res;
+uniform vec2 u_center;
+uniform float u_zoom;
+uniform float u_time;
+
+vec3 palette(float t) {
+  vec3 a = vec3(0.5, 0.5, 0.5);
+  vec3 b = vec3(0.5, 0.5, 0.5);
+  vec3 c = vec3(1.0, 1.0, 1.0);
+  vec3 d = vec3(0.00, 0.10, 0.20);
+  return a + b * cos(6.28318 * (c * t + d));
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);
+  vec2 c = u_center + uv / u_zoom;
+
+  vec2 z = vec2(0.0);
+  float iter = 0.0;
+  const float MAX = 256.0;
+  for (float i = 0.0; i < MAX; i++) {
+    z = vec2(z.x*z.x - z.y*z.y, 2.0*z.x*z.y) + c;
+    if (dot(z,z) > 4.0) { iter = i; break; }
+    iter = i;
+  }
+
+  if (iter >= MAX - 1.0) {
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+  } else {
+    float smooth_i = iter - log2(log2(dot(z,z))) + 4.0;
+    float t = smooth_i / MAX + u_time * 0.02;
+    vec3 col = palette(t * 3.0);
+    col *= 0.7 + 0.3 * sqrt(smooth_i / MAX);
+    gl_FragColor = vec4(col, 1.0);
+  }
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); }
+  return s;
+}
+
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog); gl.useProgram(prog);
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+const uRes = gl.getUniformLocation(prog, 'u_res');
+const uCenter = gl.getUniformLocation(prog, 'u_center');
+const uZoom = gl.getUniformLocation(prog, 'u_zoom');
+const uTime = gl.getUniformLocation(prog, 'u_time');
+
+let center = [-0.745, 0.186];
+let zoom = 0.8;
+let targetZoom = zoom;
+let targetCenter = [...center];
+let dragging = false, lastMouse = [0, 0];
+const start = performance.now();
+
+function resize() {
+  canvas.width = innerWidth * devicePixelRatio;
+  canvas.height = innerHeight * devicePixelRatio;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+resize(); addEventListener('resize', resize);
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const f = e.deltaY > 0 ? 0.85 : 1.18;
+  targetZoom *= f;
+}, { passive: false });
+
+canvas.addEventListener('mousedown', e => { dragging = true; lastMouse = [e.clientX, e.clientY]; });
+addEventListener('mouseup', () => { dragging = false; });
+addEventListener('mousemove', e => {
+  if (!dragging) return;
+  const s = 1.0 / (zoom * Math.min(innerWidth, innerHeight));
+  targetCenter[0] -= (e.clientX - lastMouse[0]) * s;
+  targetCenter[1] += (e.clientY - lastMouse[1]) * s;
+  lastMouse = [e.clientX, e.clientY];
+});
+
+addEventListener('keydown', e => {
+  if (e.key === 'r') { targetCenter = [-0.745, 0.186]; targetZoom = 0.8; }
+});
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function frame() {
+  zoom = lerp(zoom, targetZoom, 0.1);
+  center[0] = lerp(center[0], targetCenter[0], 0.1);
+  center[1] = lerp(center[1], targetCenter[1], 0.1);
+
+  gl.uniform2f(uRes, canvas.width, canvas.height);
+  gl.uniform2f(uCenter, center[0], center[1]);
+  gl.uniform1f(uZoom, zoom);
+  gl.uniform1f(uTime, (performance.now() - start) * 0.001);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
