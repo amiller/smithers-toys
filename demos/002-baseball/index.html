@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>002 — WebGL Baseball</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; }
+canvas { width: 100vw; height: 100vh; display: block; }
+#hud { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); color: #fff; font: bold 14px monospace; text-align: center; z-index: 2; pointer-events: none; }
+#hud .score { font-size: 24px; letter-spacing: 0.2em; }
+#hud .count { font-size: 12px; opacity: 0.7; margin-top: 4px; }
+#msg { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #ffcc00; font: bold 32px monospace; z-index: 2; pointer-events: none; opacity: 0; transition: opacity 0.3s; text-shadow: 0 0 20px rgba(255,200,0,0.5); }
+#msg.show { opacity: 1; }
+#hint { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.3); font: 11px monospace; z-index: 2; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div class="score"><span id="away">0</span> — <span id="home">0</span></div>
+  <div class="count" id="count">B:0 S:0 O:0</div>
+</div>
+<div id="msg"></div>
+<div id="hint">click to pitch · move mouse to aim bat · click to swing</div>
+
+<script>
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl');
+
+// --- State ---
+let balls = 0, strikes = 0, outs = 0;
+let awayRuns = 0, homeRuns = 0;
+let inning = 1, halfInning = 0; // 0=top, 1=bottom
+let pitchInFlight = false, swingDone = false;
+let pitchTime = 0, swingTime = 0;
+let pitchType = 0; // 0=fastball, 1=curve, 2=slider
+let pitchResult = '';
+let mouseX = 0, mouseY = 0;
+let showMessage = '', messageTimer = 0;
+
+// Ball physics
+let ballPos = [0, 1.5, 18];
+let ballVel = [0, 0, 0];
+
+// --- Shaders ---
+const VS = `
+attribute vec3 a_pos;
+attribute vec3 a_norm;
+uniform mat4 u_mvp;
+uniform mat4 u_model;
+uniform vec3 u_color;
+varying vec3 v_norm;
+varying vec3 v_color;
+varying float v_fog;
+void main() {
+  vec4 world = u_model * vec4(a_pos, 1.0);
+  gl_Position = u_mvp * vec4(a_pos, 1.0);
+  v_norm = mat3(u_model) * a_norm;
+  v_color = u_color;
+  v_fog = clamp((18.0 - a_pos.z) / 20.0, 0.0, 1.0);
+}`;
+
+const FS = `
+precision highp float;
+varying vec3 v_norm;
+varying vec3 v_color;
+varying float v_fog;
+void main() {
+  vec3 light = normalize(vec3(0.3, 1.0, 0.5));
+  float diff = max(dot(normalize(v_norm), light), 0.0) * 0.6 + 0.4;
+  vec3 col = v_color * diff;
+  col = mix(vec3(0.05, 0.15, 0.08), col, v_fog);
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+const aPos = gl.getAttribLocation(prog, 'a_pos');
+const aNorm = gl.getAttribLocation(prog, 'a_norm');
+const uMvp = gl.getUniformLocation(prog, 'u_mvp');
+const uModel = gl.getUniformLocation(prog, 'u_model');
+const uColor = gl.getUniformLocation(prog, 'u_color');
+
+// --- Math ---
+function mat4Perspective(fov, aspect, near, far) {
+  const f = 1 / Math.tan(fov / 2);
+  const nf = 1 / (near - far);
+  return new Float32Array([
+    f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,2*far*near*nf,0
+  ]);
+}
+
+function mat4LookAt(eye, center, up) {
+  const z = normalize(sub(eye, center));
+  const x = normalize(cross(up, z));
+  const y = cross(z, x);
+  return new Float32Array([
+    x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0,
+    -dot(x,eye),-dot(y,eye),-dot(z,eye),1
+  ]);
+}
+
+function mat4Mul(a, b) {
+  const o = new Float32Array(16);
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    o[j*4+i] = a[i]*b[j*4] + a[4+i]*b[j*4+1] + a[8+i]*b[j*4+2] + a[12+i]*b[j*4+3];
+  }
+  return o;
+}
+
+function mat4Identity() { return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
+function mat4Translate(x,y,z) { const m = mat4Identity(); m[12]=x; m[13]=y; m[14]=z; return m; }
+function mat4Scale(s) { const m = mat4Identity(); m[0]=m[5]=m[10]=s; return m; }
+function mat4RotX(a) { const m=mat4Identity(),c=Math.cos(a),s=Math.sin(a); m[5]=c;m[6]=s;m[9]=-s;m[10]=c; return m; }
+function mat4RotY(a) { const m=mat4Identity(),c=Math.cos(a),s=Math.sin(a); m[0]=c;m[2]=-s;m[8]=s;m[10]=c; return m; }
+
+function normalize(v) { const l = Math.sqrt(dot(v,v)); return l > 0 ? [v[0]/l,v[1]/l,v[2]/l] : [0,0,0]; }
+function sub(a,b) { return [a[0]-b[0],a[1]-b[1],a[2]-b[2]]; }
+function cross(a,b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function dot(a,b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+
+// --- Geometry ---
+function createSphere(seg, ring) {
+  const pos = [], norm = [];
+  for (let i = 0; i <= ring; i++) {
+    const phi = Math.PI * i / ring;
+    for (let j = 0; j <= seg; j++) {
+      const theta = 2 * Math.PI * j / seg;
+      const x = Math.sin(phi) * Math.cos(theta);
+      const y = Math.cos(phi);
+      const z = Math.sin(phi) * Math.sin(theta);
+      pos.push(x * 0.5, y * 0.5, z * 0.5);
+      norm.push(x, y, z);
+    }
+  }
+  const idx = [];
+  for (let i = 0; i < ring; i++) for (let j = 0; j < seg; j++) {
+    const a = i * (seg+1) + j, b = a + seg + 1;
+    idx.push(a, b, a+1, b, b+1, a+1);
+  }
+  return { pos: new Float32Array(pos), norm: new Float32Array(norm), idx: new Uint16Array(idx) };
+}
+
+function createBox(sx, sy, sz) {
+  const h = [sx/2, sy/2, sz/2];
+  const pos = [], norm = [];
+  const faces = [
+    [[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1],[0,0,1]],
+    [[1,-1,-1],[-1,-1,-1],[-1,1,-1],[1,1,-1],[0,0,-1]],
+    [[-1,1,1],[1,1,1],[1,1,-1],[-1,1,-1],[0,1,0]],
+    [[-1,-1,-1],[1,-1,-1],[1,-1,1],[-1,-1,1],[0,-1,0]],
+    [[1,-1,1],[1,-1,-1],[1,1,-1],[1,1,1],[1,0,0]],
+    [[-1,-1,-1],[-1,-1,1],[-1,1,1],[-1,1,-1],[-1,0,0]],
+  ];
+  for (const [a,b,c,d,n] of faces) {
+    pos.push(a[0]*h[0],a[1]*h[1],a[2]*h[2], b[0]*h[0],b[1]*h[1],b[2]*h[2], c[0]*h[0],c[1]*h[1],c[2]*h[2]);
+    pos.push(a[0]*h[0],a[1]*h[1],a[2]*h[2], c[0]*h[0],c[1]*h[1],c[2]*h[2], d[0]*h[0],d[1]*h[1],d[2]*h[2]);
+    for (let i = 0; i < 6; i++) norm.push(n[0],n[1],n[2]);
+  }
+  return { pos: new Float32Array(pos), norm: new Float32Array(norm), idx: null };
+}
+
+function createDiamond() {
+  // Baseball diamond: home plate at origin, first at (90,0,0) etc
+  // Scaled: 1 unit = ~90ft
+  const pos = [], norm = [];
+  // Ground quad (outfield)
+  const sz = 2.5;
+  pos.push(-sz,0,-sz, sz,0,-sz, sz,0,sz, -sz,0,-sz, sz,0,sz, -sz,0,sz);
+  for (let i = 0; i < 6; i++) norm.push(0,1,0);
+  // Infield dirt (slightly raised brown)
+  const d = 0.5;
+  pos.push(-d,0.001,-d, d,0.001,-d, d,0.001,d, -d,0.001,-d, d,0.001,d, -d,0.001,d);
+  for (let i = 0; i < 6; i++) norm.push(0,1,0);
+  return { pos: new Float32Array(pos), norm: new Float32Array(norm), idx: null };
+}
+
+function createCylinder(seg, h, r) {
+  const pos = [], norm = [];
+  for (let i = 0; i < seg; i++) {
+    const a1 = 2*Math.PI*i/seg, a2 = 2*Math.PI*(i+1)/seg;
+    const c1=Math.cos(a1),s1=Math.sin(a1),c2=Math.cos(a2),s2=Math.sin(a2);
+    // side
+    pos.push(r*c1,0,r*s1, r*c2,0,r*s2, r*c2,h,r*s2);
+    pos.push(r*c1,0,r*s1, r*c2,h,r*s2, r*c1,h,r*s1);
+    norm.push(c1,0,s1, c2,0,s2, c2,0,s2, c1,0,s1, c2,0,s2, c1,0,s1);
+    // top
+    pos.push(0,h,0, r*c1,h,r*s1, r*c2,h,r*s2);
+    norm.push(0,1,0, 0,1,0, 0,1,0);
+  }
+  return { pos: new Float32Array(pos), norm: new Float32Array(norm), idx: null };
+}
+
+// --- Build buffers ---
+function makeBuf(data) {
+  const b = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+  return b;
+}
+function makeIdxBuf(data) {
+  const b = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
+  return b;
+}
+
+const sphere = createSphere(16, 12);
+const spherePosBuf = makeBuf(sphere.pos);
+const sphereNormBuf = makeBuf(sphere.norm);
+const sphereIdxBuf = makeIdxBuf(sphere.idx);
+const sphereCount = sphere.idx.length;
+
+const ballSphere = createSphere(12, 8);
+const ballPosBuf = makeBuf(ballSphere.pos);
+const ballNormBuf = makeBuf(ballSphere.norm);
+const ballIdxBuf = makeIdxBuf(ballSphere.idx);
+const ballCount = ballSphere.idx.length;
+
+const batBox = createBox(0.08, 1.1, 0.08);
+const batPosBuf = makeBuf(batBox.pos);
+const batNormBuf = makeBuf(batBox.norm);
+const batCount = batBox.pos.length / 3;
+
+const diamondBuf = createDiamond();
+const diamondPosBuf = makeBuf(diamondBuf.pos);
+const diamondNormBuf = makeBuf(diamondBuf.norm);
+const diamondCount = diamondBuf.pos.length / 3;
+
+const baseBox = createBox(0.12, 0.04, 0.12);
+const basePosBuf = makeBuf(baseBox.pos);
+const baseNormBuf = makeBuf(baseBox.norm);
+const baseCount = baseBox.pos.length / 3;
+
+const moundCyl = createCylinder(16, 0.15, 0.27);
+const moundPosBuf = makeBuf(moundCyl.pos);
+const moundNormBuf = makeBuf(moundCyl.norm);
+const moundCount = moundCyl.pos.length / 3;
+
+// --- Draw helpers ---
+function setAttribs(posBuf, normBuf) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(aPos);
+  gl.bindBuffer(gl.ARRAY_BUFFER, normBuf);
+  gl.vertexAttribPointer(aNorm, 3, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(aNorm);
+}
+
+function draw(mvp, model, color, posBuf, normBuf, count, idxBuf) {
+  gl.uniformMatrix4fv(uMvp, false, mvp);
+  gl.uniformMatrix4fv(uModel, false, model);
+  gl.uniform3fv(uColor, color);
+  setAttribs(posBuf, normBuf);
+  if (idxBuf) {
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+    gl.drawElements(gl.TRIANGLES, count, gl.UNSIGNED_SHORT, 0);
+  } else {
+    gl.drawArrays(gl.TRIANGLES, 0, count);
+  }
+}
+
+// --- Game ---
+function msg(text) {
+  showMessage = text;
+  messageTimer = 90;
+  document.getElementById('msg').textContent = text;
+  document.getElementById('msg').classList.add('show');
+}
+
+function resetCount() { balls = 0; strikes = 0; }
+
+function updateHud() {
+  document.getElementById('away').textContent = awayRuns;
+  document.getElementById('home').textContent = homeRuns;
+  document.getElementById('count').textContent = `B:${balls} S:${strikes} O:${outs}  ${halfInning===0?'TOP':'BOT'} ${inning}`;
+}
+
+function pitch() {
+  if (pitchInFlight) return;
+  pitchInFlight = true;
+  swingDone = false;
+  pitchTime = 0;
+  pitchType = Math.floor(Math.random() * 3);
+  ballPos = [0, 1.8, 14];
+  const speed = 0.28 + Math.random() * 0.06;
+  ballVel = [
+    (Math.random() - 0.5) * 0.03 * (pitchType === 2 ? 3 : 1),
+    (pitchType === 1 ? 0.015 : -0.01),
+    -speed
+  ];
+}
+
+function checkHit() {
+  // Bat at mouseX/mouseY position
+  const batX = (mouseX / innerWidth - 0.5) * 2.0;
+  const batY = 1.0 + (1.0 - mouseY / innerHeight) * 1.2;
+
+  const dx = ballPos[0] - batX;
+  const dy = ballPos[1] - batY;
+  const dz = ballPos[2] - 0.3;
+  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+  if (dist < 0.5) {
+    // HIT
+    const power = 0.3 + Math.random() * 0.2;
+    const angle = (Math.random() - 0.5) * 1.2;
+    ballVel = [angle * 0.15, power * 0.4, -power];
+    msg(Math.random() > 0.5 ? 'CRACK!' : 'BASE HIT!');
+    pitchResult = 'hit';
+
+    // Score on hits (simplified)
+    setTimeout(() => {
+      if (halfInning === 0) awayRuns++;
+      else homeRuns++;
+      updateHud();
+      pitchInFlight = false;
+      ballPos = [0, 1.5, 18];
+      ballVel = [0,0,0];
+    }, 2000);
+    return true;
+  }
+  return false;
+}
+
+function resolvePitch() {
+  if (pitchResult) return;
+  // Strike zone check
+  const inZone = Math.abs(ballPos[0]) < 0.4 && ballPos[1] > 1.0 && ballPos[1] < 2.0;
+
+  if (inZone) {
+    if (!swingDone) {
+      strikes++;
+      msg('STRIKE LOOKING!');
+    }
+  } else {
+    if (!swingDone) {
+      balls++;
+      msg('BALL!');
+    } else {
+      strikes++;
+      msg('STRIKE!');
+    }
+  }
+
+  if (strikes >= 3) {
+    outs++;
+    strikes = 0;
+    balls = 0;
+    msg('STRIKEOUT!');
+    if (outs >= 3) {
+      outs = 0;
+      if (halfInning === 0) { halfInning = 1; }
+      else { halfInning = 0; inning++; }
+    }
+  }
+  if (balls >= 4) {
+    balls = 0;
+    msg('WALK!');
+  }
+
+  updateHud();
+  pitchInFlight = false;
+  pitchResult = '';
+}
+
+// --- Input ---
+canvas.addEventListener('click', () => {
+  if (!pitchInFlight) {
+    pitch();
+  } else if (!swingDone) {
+    swingDone = true;
+    swingTime = 0;
+    checkHit();
+  }
+});
+canvas.addEventListener('mousemove', e => {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+});
+
+// --- Main loop ---
+function resize() {
+  canvas.width = innerWidth * devicePixelRatio;
+  canvas.height = innerHeight * devicePixelRatio;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+resize();
+addEventListener('resize', resize);
+
+gl.enable(gl.DEPTH_TEST);
+gl.clearColor(0.15, 0.25, 0.15, 1.0);
+
+const startTime = performance.now();
+let lastSwingAngle = 0;
+
+function frame(now) {
+  const t = (now - startTime) * 0.001;
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  // Camera behind home plate, looking toward pitcher
+  const eye = [0, 2.0, 1.5];
+  const center = [0, 1.2, 14];
+  const proj = mat4Perspective(Math.PI / 3, canvas.width / canvas.height, 0.1, 100);
+  const view = mat4LookAt(eye, center, [0,1,0]);
+  const vp = mat4Mul(proj, view);
+
+  // Draw ground
+  draw(vp, mat4Identity(), [0.18, 0.55, 0.18], diamondPosBuf, diamondNormBuf, diamondCount, null);
+  // Infield dirt
+  const dirtBuf = createDiamond();
+  // Draw bases
+  const basePositions = [[0.45, 0.02, 13.5], [0.45, 0.02, 12.6], [-0.45, 0.02, 12.6], [0, 0.02, 11.7]]; // home, 1st, 2nd, 3rd (approx)
+  for (const bp of basePositions) {
+    draw(vp, mat4Translate(bp[0],bp[1],bp[2]), [1,1,1], basePosBuf, baseNormBuf, baseCount, null);
+  }
+  // Pitcher mound
+  draw(vp, mat4Translate(0, 0, 13), [0.55, 0.35, 0.2], moundPosBuf, moundNormBuf, moundCount, null);
+
+  // Pitcher (simple figure - body)
+  const pitcherModel = mat4Mul(mat4Translate(0, 0.7, 13.3), mat4Scale(0.3));
+  draw(vp, pitcherModel, [0.2, 0.2, 0.6], spherePosBuf, sphereNormBuf, sphereCount, sphereIdxBuf);
+  // Pitcher body
+  draw(vp, mat4Mul(mat4Translate(0, 0.3, 13.3), mat4Scale(0.25)), [1,1,1], spherePosBuf, sphereNormBuf, sphereCount, sphereIdxBuf);
+
+  // Batter (at home plate area)
+  const batterX = (mouseX / innerWidth - 0.5) * 0.6;
+  // Batter head
+  draw(vp, mat4Mul(mat4Translate(batterX, 0.85, 1.8), mat4Scale(0.25)), [0.85, 0.65, 0.5], spherePosBuf, sphereNormBuf, sphereCount, sphereIdxBuf);
+  // Batter body
+  draw(vp, mat4Mul(mat4Translate(batterX, 0.4, 1.8), mat4Scale(0.3)), [0.15, 0.15, 0.15], spherePosBuf, sphereNormBuf, sphereCount, sphereIdxBuf);
+
+  // Bat
+  let swingAngle = 0;
+  if (swingDone) {
+    swingTime += 0.15;
+    swingAngle = Math.sin(swingTime * 8) * 1.5;
+    lastSwingAngle = swingAngle;
+  }
+  const batModel = mat4Mul(mat4Mul(mat4Translate(batterX + 0.3, 1.0, 1.8), mat4RotZ(0.3 + swingAngle)), mat4RotX(0.2));
+  draw(vp, batModel, [0.6, 0.35, 0.15], batPosBuf, batNormBuf, batCount, null);
+
+  // Baseball
+  if (pitchInFlight) {
+    pitchTime++;
+    ballPos[0] += ballVel[0];
+    ballPos[1] += ballVel[1];
+    ballPos[2] += ballVel[2];
+
+    // Gravity for hits
+    if (pitchResult === 'hit') {
+      ballVel[1] -= 0.004;
+    }
+
+    // Curve ball effect
+    if (pitchType === 1 && pitchResult !== 'hit') {
+      ballVel[0] += 0.001 * Math.sin(pitchTime * 0.1);
+    }
+
+    const ballModel = mat4Mul(mat4Translate(ballPos[0], ballPos[1], ballPos[2]), mat4Scale(0.07));
+    draw(vp, ballModel, [1, 1, 1], ballPosBuf, ballNormBuf, ballCount, ballIdxBuf);
+
+    // Pitch crosses plate
+    if (!pitchResult && ballPos[2] < 1.0) {
+      resolvePitch();
+    }
+    // Ball goes too far (miss or foul)
+    if (pitchResult === 'hit' && (ballPos[1] < -1 || Math.abs(ballPos[0]) > 5 || ballPos[2] < -5)) {
+      // already handled by timeout
+    }
+  } else {
+    // Show ball in pitcher's hand
+    draw(vp, mat4Mul(mat4Translate(0.2, 1.0, 13.3), mat4Scale(0.06)), [1,1,1], ballPosBuf, ballNormBuf, ballCount, ballIdxBuf);
+  }
+
+  // Message timer
+  if (messageTimer > 0) {
+    messageTimer--;
+    if (messageTimer === 0) {
+      document.getElementById('msg').classList.remove('show');
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
+updateHud();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
