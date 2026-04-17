@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>WebGL Baseball Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            touch-action: none;
+            background: #000;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            text-align: center;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            pointer-events: none;
+            z-index: 10;
+        }
+        #hud-top {
+            display: flex;
+            gap: 40px;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        #hud-bottom {
+            font-size: 32px;
+            font-weight: bold;
+        }
+        #message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 48px;
+            font-weight: bold;
+            text-shadow: 3px 3px 6px rgba(0,0,0,0.8);
+            pointer-events: none;
+            z-index: 20;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        #message.show {
+            opacity: 1;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            text-align: center;
+            font-size: 14px;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+            pointer-events: none;
+            z-index: 10;
+        }
+        #pitch-type {
+            position: absolute;
+            top: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #ffcc00;
+            font-size: 28px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            pointer-events: none;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glCanvas"></canvas>
+    <div id="hud">
+        <div id="hud-top">
+            <div>Away: <span id="away-score">0</span></div>
+            <div>Inning: <span id="inning">1</span> (<span id="inning-half">Top</span>)</div>
+            <div>Home: <span id="home-score">0</span></div>
+        </div>
+        <div id="hud-bottom">
+            <span id="balls">0</span>-<span id="strikes">0</span> • Outs: <span id="outs">0</span>
+        </div>
+    </div>
+    <div id="pitch-type">Click/Tap right to pitch</div>
+    <div id="message"></div>
+    <div id="controls">
+        Mouse/Touch: Drag to aim bat • Click/Tap right to pitch • Click/Tap left to swing
+    </div>
+
+    <script>
+        // WebGL Setup
+        const canvas = document.getElementById('glCanvas');
+        const dpr = Math.min(window.devicePixelRatio, 2);
+        canvas.width = window.innerWidth * dpr;
+        canvas.height = window.innerHeight * dpr;
+        canvas.style.width = window.innerWidth + 'px';
+        canvas.style.height = window.innerHeight + 'px';
+
+        const gl = canvas.getContext('webgl');
+        if (!gl) {
+            alert('WebGL not supported');
+        }
+
+        // Matrix functions
+        function mat4Identity() {
+            return new Float32Array([
+                1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1
+            ]);
+        }
+
+        function mat4Perspective(fov, aspect, near, far) {
+            const f = 1.0 / Math.tan(fov / 2);
+            const nf = 1 / (near - far);
+            return new Float32Array([
+                f/aspect, 0, 0, 0,
+                0, f, 0, 0,
+                0, 0, (far+near)*nf, -1,
+                0, 0, 2*far*near*nf, 0
+            ]);
+        }
+
+        function mat4Translate(x, y, z) {
+            return new Float32Array([
+                1,0,0,0, 0,1,0,0, 0,0,1,0, x,y,z,1
+            ]);
+        }
+
+        function mat4Scale(x, y, z) {
+            return new Float32Array([
+                x,0,0,0, 0,y,0,0, 0,0,z,0, 0,0,0,1
+            ]);
+        }
+
+        function mat4RotX(angle) {
+            const c = Math.cos(angle);
+            const s = Math.sin(angle);
+            return new Float32Array([
+                1,0,0,0, 0,c,s,0, 0,-s,c,0, 0,0,0,1
+            ]);
+        }
+
+        function mat4RotY(angle) {
+            const c = Math.cos(angle);
+            const s = Math.sin(angle);
+            return new Float32Array([
+                c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1
+            ]);
+        }
+
+        function mat4RotZ(angle) {
+            const c = Math.cos(angle);
+            const s = Math.sin(angle);
+            return new Float32Array([
+                c,s,0,0, -s,c,0,0, 0,0,1,0, 0,0,0,1
+            ]);
+        }
+
+        function mat4Multiply(a, b) {
+            const result = new Float32Array(16);
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    result[i*4+j] = 0;
+                    for (let k = 0; k < 4; k++) {
+                        result[i*4+j] += a[i*4+k] * b[k*4+j];
+                    }
+                }
+            }
+            return result;
+        }
+
+        function mat4Transpose(m) {
+            return new Float32Array([
+                m[0], m[4], m[8], m[12],
+                m[1], m[5], m[9], m[13],
+                m[2], m[6], m[10], m[14],
+                m[3], m[7], m[11], m[15]
+            ]);
+        }
+
+        // Vertex shader
+        const vsSource = `
+            attribute vec4 aPosition;
+            attribute vec4 aColor;
+            attribute vec3 aNormal;
+
+            uniform mat4 uModelView;
+            uniform mat4 uProjection;
+            uniform mat4 uNormalMatrix;
+
+            varying vec4 vColor;
+            varying vec3 vNormal;
+            varying vec3 vPosition;
+
+            void main() {
+                gl_Position = uProjection * uModelView * aPosition;
+                vColor = aColor;
+                vNormal = (uNormalMatrix * vec4(aNormal, 0.0)).xyz;
+                vPosition = (uModelView * aPosition).xyz;
+            }
+        `;
+
+        // Fragment shader
+        const fsSource = `
+            precision mediump float;
+
+            varying vec4 vColor;
+            varying vec3 vNormal;
+            varying vec3 vPosition;
+
+            uniform vec3 uLightDir;
+            uniform vec3 uLightColor;
+            uniform vec3 uAmbientColor;
+
+            void main() {
+                vec3 normal = normalize(vNormal);
+                float diff = max(dot(normal, uLightDir), 0.0);
+                vec3 color = vColor.rgb * (uAmbientColor + uLightColor * diff);
+                gl_FragColor = vec4(color, vColor.a);
+            }
+        `;
+
+        function createShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error(gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        function createProgram(gl, vsSource, fsSource) {
+            const vertexShader = createShader(gl, gl.VERTEX_SHADER, vsSource);
+            const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+            const program = gl.createProgram();
+            gl.attachShader(program, vertexShader);
+            gl.attachShader(program, fragmentShader);
+            gl.linkProgram(program);
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                console.error(gl.getProgramInfoLog(program));
+                return null;
+            }
+            return program;
+        }
+
+        const program = createProgram(gl, vsSource, fsSource);
+        gl.useProgram(program);
+
+        // Get attribute and uniform locations
+        const aPosition = gl.getAttribLocation(program, 'aPosition');
+        const aColor = gl.getAttribLocation(program, 'aColor');
+        const aNormal = gl.getAttribLocation(program, 'aNormal');
+        const uModelView = gl.getUniformLocation(program, 'uModelView');
+        const uProjection = gl.getUniformLocation(program, 'uProjection');
+        const uNormalMatrix = gl.getUniformLocation(program, 'uNormalMatrix');
+        const uLightDir = gl.getUniformLocation(program, 'uLightDir');
+        const uLightColor = gl.getUniformLocation(program, 'uLightColor');
+        const uAmbientColor = gl.getUniformLocation(program, 'uAmbientColor');
+
+        // Set light uniforms
+        gl.uniform3fv(uLightDir, [0.5, 1.0, 0.5]);
+        gl.uniform3fv(uLightColor, [1.0, 1.0, 1.0]);
+        gl.uniform3fv(uAmbientColor, [0.3, 0.3, 0.3]);
+
+        // Create sphere geometry
+        function createSphere(radius, slices, stacks) {
+            const positions = [];
+            const colors = [];
+            const normals = [];
+            const indices = [];
+
+            for (let i = 0; i <= stacks; i++) {
+                const phi = Math.PI * i / stacks;
+                const sinPhi = Math.sin(phi);
+                const cosPhi = Math.cos(phi);
+
+                for (let j = 0; j <= slices; j++) {
+                    const theta = 2 * Math.PI * j / slices;
+                    const sinTheta = Math.sin(theta);
+                    const cosTheta = Math.cos(theta);
+
+                    const x = cosTheta * sinPhi;
+                    const y = cosPhi;
+                    const z = sinTheta * sinPhi;
+
+                    positions.push(radius * x, radius * y, radius * z);
+                    normals.push(x, y, z);
+                    colors.push(1.0, 1.0, 1.0, 1.0);
+                }
+            }
+
+            for (let i = 0; i < stacks; i++) {
+                for (let j = 0; j < slices; j++) {
+                    const first = i * (slices + 1) + j;
+                    const second = first + slices + 1;
+                    indices.push(first, second, first + 1);
+                    indices.push(second, second + 1, first + 1);
+                }
+            }
+
+            return { positions, colors, normals, indices };
+        }
+
+        // Create box geometry
+        function createBox(width, height, depth, r, g, b, a) {
+            const w = width / 2;
+            const h = height / 2;
+            const d = depth / 2;
+
+            const positions = [
+                // Front
+                -w, -h,  d,  w, -h,  d,  w,  h,  d, -w,  h,  d,
+                // Back
+                 w, -h, -d, -w, -h, -d, -w,  h, -d,  w,  h, -d,
+                // Top
+                -w,  h,  d,  w,  h,  d,  w,  h, -d, -w,  h, -d,
+                // Bottom
+                -w, -h, -d,  w, -h, -d,  w, -h,  d, -w, -h,  d,
+                // Right
+                 w, -h,  d,  w, -h, -d,  w,  h, -d,  w,  h,  d,
+                // Left
+                -w, -h, -d, -w, -h,  d, -w,  h,  d, -w,  h, -d
+            ];
+
+            const normals = [
+                0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+                0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1,
+                0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
+                0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0,
+                1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
+                -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0
+            ];
+
+            const colors = [];
+            for (let i = 0; i < 24; i++) {
+                colors.push(r, g, b, a);
+            }
+
+            const indices = [
+                0, 1, 2, 0, 2, 3,
+                4, 5, 6, 4, 6, 7,
+                8, 9, 10, 8, 10, 11,
+                12, 13, 14, 12, 14, 15,
+                16, 17, 18, 16, 18, 19,
+                20, 21, 22, 20, 22, 23
+            ];
+
+            return { positions, colors, normals, indices };
+        }
+
+        // Create cylinder geometry
+        function createCylinder(radius, height, segments, r, g, b, a) {
+            const positions = [];
+            const colors = [];
+            const normals = [];
+            const indices = [];
+
+            // Top circle
+            for (let i = 0; i <= segments; i++) {
+                const angle = 2 * Math.PI * i / segments;
+                positions.push(radius * Math.cos(angle), height / 2, radius * Math.sin(angle));
+                normals.push(0, 1, 0);
+                colors.push(r, g, b, a);
+            }
+            positions.push(0, height / 2, 0);
+            normals.push(0, 1, 0);
+            colors.push(r, g, b, a);
+
+            // Bottom circle
+            const bottomOffset = positions.length / 3;
+            for (let i = 0; i <= segments; i++) {
+                const angle = 2 * Math.PI * i / segments;
+                positions.push(radius * Math.cos(angle), -height / 2, radius * Math.sin(angle));
+                normals.push(0, -1, 0);
+                colors.push(r, g, b, a);
+            }
+            positions.push(0, -height / 2, 0);
+            normals.push(0, -1, 0);
+            colors.push(r, g, b, a);
+
+            // Side
+            const sideOffset = positions.length / 3;
+            for (let i = 0; i <= segments; i++) {
+                const angle = 2 * Math.PI * i / segments;
+                const x = Math.cos(angle);
+                const z = Math.sin(angle);
+                positions.push(radius * x, height / 2, radius * z);
+                normals.push(x, 0, z);
+                colors.push(r, g, b, a);
+                positions.push(radius * x, -height / 2, radius * z);
+                normals.push(x, 0, z);
+                colors.push(r, g, b, a);
+            }
+
+            // Top indices
+            const topCenter = segments + 1;
+            for (let i = 0; i < segments; i++) {
+                indices.push(i, i + 1, topCenter);
+            }
+
+            // Bottom indices
+            const bottomCenter = bottomOffset + segments + 1;
+            for (let i = 0; i < segments; i++) {
+                indices.push(bottomOffset + i, bottomCenter, bottomOffset + i + 1);
+            }
+
+            // Side indices
+            for (let i = 0; i < segments; i++) {
+                const si = sideOffset + i * 2;
+                indices.push(si, si + 1, si + 3);
+                indices.push(si, si + 3, si + 2);
+            }
+
+            return { positions, colors, normals, indices };
+        }
+
+        // Create cone geometry
+        function createCone(radius, height, segments, r, g, b, a) {
+            const positions = [];
+            const colors = [];
+            const normals = [];
+            const indices = [];
+
+            // Bottom circle
+            for (let i = 0; i <= segments; i++) {
+                const angle = 2 * Math.PI * i / segments;
+                positions.push(radius * Math.cos(angle), 0, radius * Math.sin(angle));
+                normals.push(0, -1, 0);
+                colors.push(r, g, b, a);
+            }
+            positions.push(0, 0, 0);
+            normals.push(0, -1, 0);
+            colors.push(r, g, b, a);
+
+            // Side
+            const sideOffset = positions.length / 3;
+            const topVertex = positions.length / 3;
+            positions.push(0, height, 0);
+            normals.push(0, 1, 0);
+            colors.push(r, g, b, a);
+
+            for (let i = 0; i <= segments; i++) {
+                const angle = 2 * Math.PI * i / segments;
+                const x = Math.cos(angle);
+                const z = Math.sin(angle);
+                positions.push(radius * x, 0, radius * z);
+
+                // Calculate normal for side
+                const nx = x * height / Math.sqrt(height * height + radius * radius);
+                const nz = z * height / Math.sqrt(height * height + radius * radius);
+                const ny = radius / Math.sqrt(height * height + radius * radius);
+                normals.push(nx, ny, nz);
+                colors.push(r, g, b, a);
+            }
+
+            // Bottom indices
+            const bottomCenter = segments + 1;
+            for (let i = 0; i < segments; i++) {
+                indices.push(i, bottomCenter, i + 1);
+            }
+
+            // Side indices
+            for (let i = 0; i < segments; i++) {
+                indices.push(topVertex, sideOffset + 1 + i + 1, sideOffset + 1 + i);
+            }
+
+            return { positions, colors, normals, indices };
+        }
+
+        // Create buffer and draw function
+        function createMesh(geometry) {
+            const positionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(geometry.positions), gl.STATIC_DRAW);
+
+            const colorBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(geometry.colors), gl.STATIC_DRAW);
+
+            const normalBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(geometry.normals), gl.STATIC_DRAW);
+
+            const indexBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(geometry.indices), gl.STATIC_DRAW);
+
+            return {
+                positionBuffer,
+                colorBuffer,
+                normalBuffer,
+                indexBuffer,
+                indexCount: geometry.indices.length
+            };
+        }
+
+        // Create all meshes
+        const sphereMesh = createMesh(createSphere(1, 16, 16));
+        const ballMesh = createMesh(createSphere(0.05, 12, 12));
+        const boxMesh = createMesh(createBox(1, 1, 1, 1, 1, 1, 1));
+        const cylinderMesh = createMesh(createCylinder(1, 1, 12, 1, 1, 1, 1));
+        const coneMesh = createMesh(createCone(1, 1, 12, 1, 1, 1, 1));
+
+        // Draw mesh function
+        function drawMesh(mesh, modelView, normalMatrix) {
+            gl.bindBuffer(gl.ARRAY_BUFFER, mesh.positionBuffer);
+            gl.vertexAttribPointer(aPosition, 3, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(aPosition);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, mesh.colorBuffer);
+            gl.vertexAttribPointer(aColor, 4, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(aColor);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, mesh.normalBuffer);
+            gl.vertexAttribPointer(aNormal, 3, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(aNormal);
+
+            gl.uniformMatrix4fv(uModelView, false, modelView);
+            gl.uniformMatrix4fv(uNormalMatrix, false, normalMatrix);
+
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
+            gl.drawElements(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_SHORT, 0);
+        }
+
+        // Game state
+        let gameState = {
+            balls: 0,
+            strikes: 0,
+            outs: 0,
+            inning: 1,
+            isTopInning: true,
+            homeScore: 0,
+            awayScore: 0,
+            bases: [false, false, false], // first, second, third
+            battingTeam: 'away',
+            fieldingTeam: 'home'
+        };
+
+        let ballState = {
+            x: 0,
+            y: 1,
+            z: -10,
+            vx: 0,
+            vy: 0,
+            vz: 0,
+            active: false,
+            type: null
+        };
+
+        const pitchTypes = ['fastball', 'curveball', 'slider'];
+        let currentPitchIndex = 0;
+        let mouseX = window.innerWidth / 2;
+        let mouseY = window.innerHeight / 2;
+        let batAngleX = 0;
+        let batAngleY = 0;
+        let isSwinging = false;
+        let swingProgress = 0;
+
+        // Camera position (behind home plate)
+        const cameraPos = { x: 0, y: 3, z: 8 };
+        const cameraTarget = { x: 0, y: 1, z: -15 };
+
+        // Update HUD
+        function updateHUD() {
+            document.getElementById('away-score').textContent = gameState.awayScore;
+            document.getElementById('home-score').textContent = gameState.homeScore;
+            document.getElementById('inning').textContent = gameState.inning;
+            document.getElementById('inning-half').textContent = gameState.isTopInning ? 'Top' : 'Bot';
+            document.getElementById('balls').textContent = gameState.balls;
+            document.getElementById('strikes').textContent = gameState.strikes;
+            document.getElementById('outs').textContent = gameState.outs;
+        }
+
+        // Show message
+        function showMessage(text, duration = 1000) {
+            const msg = document.getElementById('message');
+            msg.textContent = text;
+            msg.classList.add('show');
+            setTimeout(() => msg.classList.remove('show'), duration);
+        }
+
+        // Update pitch type display
+        function updatePitchTypeDisplay() {
+            const display = document.getElementById('pitch-type');
+            if (ballState.active) {
+                display.textContent = ballState.type.toUpperCase();
+            } else {
+                display.textContent = 'Next: ' + pitchTypes[currentPitchIndex].toUpperCase();
+            }
+        }
+
+        // Pitch the ball
+        function pitchBall() {
+            if (ballState.active) return;
+
+            ballState.x = 0;
+            ballState.y = 1.5;
+            ballState.z = -15;
+            ballState.active = true;
+            ballState.type = pitchTypes[currentPitchIndex];
+
+            const speed = 0.4 + Math.random() * 0.1;
+            const targetX = (Math.random() - 0.5) * 2;
+            const targetY = 1 + Math.random() * 0.5;
+
+            switch (ballState.type) {
+                case 'fastball':
+                    ballState.vx = targetX * 0.02;
+                    ballState.vy = 0;
+                    ballState.vz = speed;
+                    break;
+                case 'curveball':
+                    ballState.vx = targetX * 0.02;
+                    ballState.vy = 0.05;
+                    ballState.vz = speed * 0.7;
+                    break;
+                case 'slider':
+                    ballState.vx = 0.03 * (Math.random() > 0.5 ? 1 : -1);
+                    ballState.vy = 0;
+                    ballState.vz = speed * 0.8;
+                    break;
+            }
+
+            currentPitchIndex = (currentPitchIndex + 1) % pitchTypes.length;
+            updatePitchTypeDisplay();
+        }
+
+        // Swing the bat
+        function swingBat() {
+            if (!ballState.active || isSwinging) return;
+            isSwinging = true;
+            swingProgress = 0;
+            checkHit();
+        }
+
+        // Check for hit
+        function checkHit() {
+            const ballDistToHome = Math.sqrt(
+                Math.pow(ballState.x, 2) +
+                Math.pow(ballState.y - 1, 2) +
+                Math.pow(ballState.z - 1, 2)
+            );
+
+            const batTipX = 0.5 * Math.sin(batAngleY);
+            const batTipY = 1.2 + 0.3 * Math.sin(batAngleX);
+            const batTipZ = 1.5 * Math.cos(batAngleY);
+
+            const distToBat = Math.sqrt(
+                Math.pow(ballState.x - batTipX, 2) +
+                Math.pow(ballState.y - batTipY, 2) +
+                Math.pow(ballState.z - batTipZ, 2)
+            );
+
+            if (distToBat < 0.5 && ballDistToHome < 2) {
+                // Hit!
+                showMessage('HIT!', 1500);
+                gameState.balls = 0;
+                gameState.strikes = 0;
+
+                // Hit physics
+                ballState.vx = 0.2 * Math.sin(batAngleY) + (Math.random() - 0.5) * 0.1;
+                ballState.vy = 0.3 + Math.random() * 0.1;
+                ballState.vz = -0.4 - Math.random() * 0.1;
+                ballState.type = 'hit';
+
+                setTimeout(() => {
+                    if (ballState.type === 'hit') {
+                        // Base hit
+                        const baseHit = Math.floor(Math.random() * 4);
+                        if (baseHit === 3) {
+                            showMessage('HOME RUN!', 2000);
+                            gameState.homeScore++;
+                        } else {
+                            showMessage(baseHit === 0 ? 'SINGLE!' : baseHit === 1 ? 'DOUBLE!' : 'TRIPLE!', 1500);
+                        }
+                        resetBall();
+                    }
+                }, 2000);
+            }
+        }
+
+        // Update ball physics
+        function updateBall() {
+            if (!ballState.active) return;
+
+            ballState.x += ballState.vx;
+            ballState.y += ballState.vy;
+            ballState.z += ballState.vz;
+
+            // Pitch-specific physics
+            switch (ballState.type) {
+                case 'curveball':
+                    ballState.vy -= 0.005;
+                    ballState.vx += Math.sin(ballState.z * 0.5) * 0.005;
+                    break;
+                case 'slider':
+                    ballState.vx += Math.cos(ballState.z * 0.3) * 0.003;
+                    break;
+                case 'hit':
+                    ballState.vy -= 0.015; // Gravity
+                    break;
+            }
+
+            // Check strike zone
+            if (ballState.z > 0.5 && ballState.z < 2 && !isSwinging && ballState.type !== 'hit') {
+                const inStrikeZone = ballState.x > -0.5 && ballState.x < 0.5 &&
+                                     ballState.y > 0.8 && ballState.y < 1.5;
+                if (inStrikeZone) {
+                    gameState.strikes++;
+                    showMessage('STRIKE!', 800);
+                    resetBall();
+                    updateHUD();
+                }
+            }
+
+            // Ball out of bounds or hit too far
+            if (ballState.y < 0 || ballState.z < -30 || ballState.z > 5) {
+                if (ballState.type !== 'hit') {
+                    if (gameState.strikes >= 3) {
+                        showMessage('STRIKE OUT!', 1500);
+                        gameState.outs++;
+                        gameState.balls = 0;
+                        gameState.strikes = 0;
+                    } else if (gameState.balls >= 4) {
+                        showMessage('WALK!', 1500);
+                        gameState.balls = 0;
+                        gameState.strikes = 0;
+                    } else {
+                        showMessage('BALL!', 800);
+                        gameState.balls++;
+                    }
+                }
+                resetBall();
+                updateHUD();
+            }
+
+            // Check outs and innings
+            if (gameState.outs >= 3) {
+                gameState.outs = 0;
+                gameState.bases = [false, false, false];
+                if (gameState.isTopInning) {
+                    gameState.isTopInning = false;
+                    gameState.battingTeam = 'home';
+                    gameState.fieldingTeam = 'away';
+                } else {
+                    gameState.isTopInning = true;
+                    gameState.battingTeam = 'away';
+                    gameState.fieldingTeam = 'home';
+                    gameState.inning++;
+                    if (gameState.inning > 9) {
+                        showMessage('GAME OVER!', 3000);
+                    }
+                }
+                updateHUD();
+            }
+        }
+
+        // Reset ball
+        function resetBall() {
+            ballState.active = false;
+            ballState.type = null;
+            ballState.x = 0;
+            ballState.y = 1;
+            ballState.z = -10;
+            updatePitchTypeDisplay();
+        }
+
+        // Update swing
+        function updateSwing() {
+            if (isSwinging) {
+                swingProgress += 0.15;
+                if (swingProgress >= Math.PI) {
+                    isSwinging = false;
+                    swingProgress = 0;
+                }
+            }
+        }
+
+        // Input handling
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const halfWidth = rect.width / 2;
+
+            if (x > halfWidth) {
+                pitchBall();
+            } else {
+                swingBat();
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+
+            // Update bat aim
+            batAngleY = ((mouseX / rect.width) - 0.5) * 1.5;
+            batAngleX = ((mouseY / rect.height) - 0.5) * 0.8;
+        });
+
+        // Touch support
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const touch = e.touches[0];
+            const x = touch.clientX - rect.left;
+            const halfWidth = rect.width / 2;
+
+            mouseX = x;
+            mouseY = touch.clientY - rect.top;
+
+            if (x > halfWidth) {
+                pitchBall();
+            } else {
+                swingBat();
+            }
+        }, { passive: false });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const touch = e.touches[0];
+            mouseX = touch.clientX - rect.left;
+            mouseY = touch.clientY - rect.top;
+
+            batAngleY = ((mouseX / rect.width) - 0.5) * 1.5;
+            batAngleX = ((mouseY / rect.height) - 0.5) * 0.8;
+        }, { passive: false });
+
+        canvas.addEventListener('touchend', (e) => {
+            e.preventDefault();
+        }, { passive: false });
+
+        // Initialize mouse position to center
+        mouseX = window.innerWidth / 2;
+        mouseY = window.innerHeight / 2;
+
+        // Render loop
+        function render() {
+            // Update game state
+            updateBall();
+            updateSwing();
+
+            // Clear canvas
+            gl.clearColor(0.53, 0.81, 0.92, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            gl.enable(gl.DEPTH_TEST);
+
+            // Set up projection
+            const aspect = canvas.width / canvas.height;
+            const projection = mat4Perspective(Math.PI / 4, aspect, 0.1, 100);
+            gl.uniformMatrix4fv(uProjection, false, projection);
+
+            // Set up camera
+            const cameraRotY = Math.atan2(cameraPos.x - cameraTarget.x, cameraPos.z - cameraTarget.z);
+            const cameraDist = Math.sqrt(
+                Math.pow(cameraPos.x - cameraTarget.x, 2) +
+                Math.pow(cameraPos.y - cameraTarget.y, 2) +
+                Math.pow(cameraPos.z - cameraTarget.z, 2)
+            );
+            const cameraPitch = Math.asin((cameraPos.y - cameraTarget.y) / cameraDist);
+
+            let modelView = mat4Identity();
+            modelView = mat4Multiply(modelView, mat4RotX(cameraPitch));
+            modelView = mat4Multiply(modelView, mat4RotY(cameraRotY));
+            modelView = mat4Multiply(modelView, mat4Translate(0, 0, -cameraDist));
+            modelView = mat4Multiply(modelView, mat4Translate(-cameraTarget.x, -cameraTarget.y, -cameraTarget.z));
+
+            // Draw field (green plane)
+            let fieldMV = mat4Multiply(modelView, mat4Translate(0, -0.1, 0));
+            fieldMV = mat4Multiply(fieldMV, mat4Scale(30, 0.1, 30));
+            let normalMatrix = mat4Transpose(mat4Inverse(fieldMV));
+            drawMesh(boxMesh, fieldMV, normalMatrix);
+
+            // Draw dirt infield (diamond shape with multiple boxes)
+            const dirtColor = [0.6, 0.4, 0.2, 1.0];
+            for (let i = 0; i < 4; i++) {
+                const angle = Math.PI / 4 + i * Math.PI / 2;
+                const dx = Math.cos(angle) * 4;
+                const dz = Math.sin(angle) * 4;
+                let dirtMV = mat4Multiply(modelView, mat4Translate(dx, 0, dz));
+                dirtMV = mat4Multiply(dirtMV, mat4RotY(angle));
+                dirtMV = mat4Multiply(dirtMV, mat4Scale(3, 0.15, 3));
+
+                // Create dirt-colored box
+                const dirtMesh = createMesh(createBox(1, 1, 1, dirtColor[0], dirtColor[1], dirtColor[2], dirtColor[3]));
+                normalMatrix = mat4Transpose(mat4Inverse(dirtMV));
+                drawMesh(dirtMesh, dirtMV, normalMatrix);
+            }
+
+            // Draw pitcher's mound
+            let moundMV = mat4Multiply(modelView, mat4Translate(0, 0.15, -10));
+            moundMV = mat4Multiply(moundMV, mat4Scale(2, 0.3, 2));
+            normalMatrix = mat4Transpose(mat4Inverse(moundMV));
+            const moundMesh = createMesh(createCylinder(1, 1, 12, 0.6, 0.4, 0.2, 1.0));
+            drawMesh(moundMesh, moundMV, normalMatrix);
+
+            // Draw bases
+            const basePositions = [
+                { x: 0, z: 0 },    // home plate
+                { x: 0, z: -8 },   // first base
+                { x: -8, z: -8 },  // second base
+                { x: -8, z: 0 }    // third base
+            ];
+
+            basePositions.forEach((pos, i) => {
+                let baseMV = mat4Multiply(modelView, mat4Translate(pos.x, 0.1, pos.z));
+                baseMV = mat4Multiply(baseMV, mat4Scale(0.8, 0.1, 0.8));
+                normalMatrix = mat4Transpose(mat4Inverse(baseMV));
+                const baseMesh = createMesh(createBox(1, 1, 1, 1.0, 1.0, 1.0, 1.0));
+                drawMesh(baseMesh, baseMV, normalMatrix);
+            });
+
+            // Draw pitcher
+            // Body
+            let pitcherBodyMV = mat4Multiply(modelView, mat4Translate(0, 1.2, -10));
+            pitcherBodyMV = mat4Multiply(pitcherBodyMV, mat4Scale(0.4, 0.8, 0.3));
+            normalMatrix = mat4Transpose(mat4Inverse(pitcherBodyMV));
+            const pitcherBodyMesh = createMesh(createBox(1, 1, 1, 0.2, 0.3, 0.6, 1.0));
+            drawMesh(pitcherBodyMesh, pitcherBodyMV, normalMatrix);
+
+            // Head
+            let pitcherHeadMV = mat4Multiply(modelView, mat4Translate(0, 1.8, -10));
+            pitcherHeadMV = mat4Multiply(pitcherHeadMV, mat4Scale(0.25, 0.25, 0.25));
+            normalMatrix = mat4Transpose(mat4Inverse(pitcherHeadMV));
+            const pitcherHeadMesh = createMesh(createSphere(1, 12, 12));
+            drawMesh(pitcherHeadMesh, pitcherHeadMV, normalMatrix);
+
+            // Arms
+            let pitcherArmL = mat4Multiply(modelView, mat4Translate(-0.5, 1.3, -10));
+            pitcherArmL = mat4Multiply(pitcherArmL, mat4Scale(0.1, 0.4, 0.1));
+            normalMatrix = mat4Transpose(mat4Inverse(pitcherArmL));
+            const pitcherArmLMesh = createMesh(createCylinder(1, 1, 8, 0.2, 0.3, 0.6, 1.0));
+            drawMesh(pitcherArmLMesh, pitcherArmL, normalMatrix);
+
+            let pitcherArmR = mat4Multiply(modelView, mat4Translate(0.5, 1.3, -10));
+            pitcherArmR = mat4Multiply(pitcherArmR, mat4RotZ(ballState.active ? -1.5 : 0));
+            pitcherArmR = mat4Multiply(pitcherArmR, mat4Scale(0.1, 0.4, 0.1));
+            normalMatrix = mat4Transpose(mat4Inverse(pitcherArmR));
+            const pitcherArmRMesh = createMesh(createCylinder(1, 1, 8, 0.2, 0.3, 0.6, 1.0));
+            drawMesh(pitcherArmRMesh, pitcherArmR, normalMatrix);
+
+            // Legs
+            let pitcherLegL = mat4Multiply(modelView, mat4Translate(-0.15, 0.5, -10));
+            pitcherLegL = mat4Multiply(pitcherLegL, mat4Scale(0.12, 0.5, 0.12));
+            normalMatrix = mat4Transpose(mat4Inverse(pitcherLegL));
+            const pitcherLegLMesh = createMesh(createCylinder(1, 1, 8, 0.2, 0.3, 0.6, 1.0));
+            drawMesh(pitcherLegLMesh, pitcherLegL, normalMatrix);
+
+            let pitcherLegR = mat4Multiply(modelView, mat4Translate(0.15, 0.5, -10));
+            pitcherLegR = mat4Multiply(pitcherLegR, mat4Scale(0.12, 0.5, 0.12));
+            normalMatrix = mat4Transpose(mat4Inverse(pitcherLegR));
+            const pitcherLegRMesh = createMesh(createCylinder(1, 1, 8, 0.2, 0.3, 0.6, 1.0));
+            drawMesh(pitcherLegRMesh, pitcherLegR, normalMatrix);
+
+            // Draw batter (in foreground, visible)
+            // Body
+            let batterBodyMV = mat4Multiply(modelView, mat4Translate(0, 1.0, 0.5));
+            batterBodyMV = mat4Multiply(batterBodyMV, mat4RotY(0.5));
+            batterBodyMV = mat4Multiply(batterBodyMV, mat4Scale(0.35, 0.7, 0.25));
+            normalMatrix = mat4Transpose(mat4Inverse(batterBodyMV));
+            const batterBodyMesh = createMesh(createBox(1, 1, 1, 0.4, 0.2, 0.5, 1.0));
+            drawMesh(batterBodyMesh, batterBodyMV, normalMatrix);
+
+            // Head
+            let batterHeadMV = mat4Multiply(modelView, mat4Translate(0, 1.55, 0.5));
+            batterHeadMV = mat4Multiply(batterHeadMV, mat4Scale(0.2, 0.22, 0.2));
+            normalMatrix = mat4Transpose(mat4Inverse(batterHeadMV));
+            const batterHeadMesh = createMesh(createSphere(1, 12, 12));
+            drawMesh(batterHeadMesh, batterHeadMV, normalMatrix);
+
+            // Arms
+            let batterArmL = mat4Multiply(modelView, mat4Translate(-0.4, 1.1, 0.5));
+            batterArmL = mat4Multiply(batterArmL, mat4Scale(0.1, 0.35, 0.1));
+            normalMatrix = mat4Transpose(mat4Inverse(batterArmL));
+            const batterArmLMesh = createMesh(createCylinder(1, 1, 8, 0.4, 0.2, 0.5, 1.0));
+            drawMesh(batterArmLMesh, batterArmL, normalMatrix);
+
+            let batterArmR = mat4Multiply(modelView, mat4Translate(0.3, 1.1, 0.5));
+            batterArmR = mat4Multiply(batterArmR, mat4RotX(0.8));
+            batterArmR = mat4Multiply(batterArmR, mat4Scale(0.1, 0.35, 0.1));
+            normalMatrix = mat4Transpose(mat4Inverse(batterArmR));
+            const batterArmRMesh = createMesh(createCylinder(1, 1, 8, 0.4, 0.2, 0.5, 1.0));
+            drawMesh(batterArmRMesh, batterArmR, normalMatrix);
+
+            // Legs
+            let batterLegL = mat4Multiply(modelView, mat4Translate(-0.12, 0.35, 0.5));
+            batterLegL = mat4Multiply(batterLegL, mat4Scale(0.1, 0.4, 0.1));
+            normalMatrix = mat4Transpose(mat4Inverse(batterLegL));
+            const batterLegLMesh = createMesh(createCylinder(1, 1, 8, 0.4, 0.2, 0.5, 1.0));
+            drawMesh(batterLegLMesh, batterLegL, normalMatrix);
+
+            let batterLegR = mat4Multiply(modelView, mat4Translate(0.12, 0.35, 0.5));
+            batterLegR = mat4Multiply(batterLegR, mat4Scale(0.1, 0.4, 0.1));
+            normalMatrix = mat4Transpose(mat4Inverse(batterLegR));
+            const batterLegRMesh = createMesh(createCylinder(1, 1, 8, 0.4, 0.2, 0.5, 1.0));
+            drawMesh(batterLegRMesh, batterLegR, normalMatrix);
+
+            // Draw bat
+            const batSwingAngle = isSwinging ? Math.sin(swingProgress) * 1.5 : 0;
+            let batHandleMV = mat4Multiply(modelView, mat4Translate(0.3, 1.1, 0.5));
+            batHandleMV = mat4Multiply(batHandleMV, mat4RotX(0.8 + batSwingAngle));
+            batHandleMV = mat4Multiply(batHandleMV, mat4RotY(batAngleY * 0.5));
+            batHandleMV = mat4Multiply(batHandleMV, mat4RotX(batAngleX * 0.3));
+            batHandleMV = mat4Multiply(batHandleMV, mat4Translate(0.5, 0, 0));
+            batHandleMV = mat4Multiply(batHandleMV, mat4Scale(0.6, 0.04, 0.04));
+            normalMatrix = mat4Transpose(mat4Inverse(batHandleMV));
+            const batHandleMesh = createMesh(createCylinder(1, 1, 8, 0.6, 0.4, 0.2, 1.0));
+            drawMesh(batHandleMesh, batHandleMV, normalMatrix);
+
+            // Bat head
+            let batHeadMV = mat4Multiply(modelView, mat4Translate(0.3, 1.1, 0.5));
+            batHeadMV = mat4Multiply(batHeadMV, mat4RotX(0.8 + batSwingAngle));
+            batHeadMV = mat4Multiply(batHeadMV, mat4RotY(batAngleY * 0.5));
+            batHeadMV = mat4Multiply(batHeadMV, mat4RotX(batAngleX * 0.3));
+            batHeadMV = mat4Multiply(batHeadMV, mat4Translate(1.0, 0, 0));
+            batHeadMV = mat4Multiply(batHeadMV, mat4Scale(0.15, 0.15, 0.15));
+            normalMatrix = mat4Transpose(mat4Inverse(batHeadMV));
+            drawMesh(sphereMesh, batHeadMV, normalMatrix);
+
+            // Draw ball
+            if (ballState.active) {
+                let ballMV = mat4Multiply(modelView, mat4Translate(ballState.x, ballState.y, ballState.z));
+                ballMV = mat4Multiply(ballMV, mat4Scale(0.05, 0.05, 0.05));
+                normalMatrix = mat4Transpose(mat4Inverse(ballMV));
+                drawMesh(ballMesh, ballMV, normalMatrix);
+            }
+
+            requestAnimationFrame(render);
+        }
+
+        // Matrix inverse helper
+        function mat4Inverse(m) {
+            const inv = new Float32Array(16);
+            inv[0] = m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
+            inv[4] = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
+            inv[8] = m[4]*m[9]*m[15] - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9];
+            inv[12] = -m[4]*m[9]*m[14] + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9];
+            inv[1] = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10];
+            inv[5] = m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10];
+            inv[9] = -m[0]*m[9]*m[15] + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9];
+            inv[13] = m[0]*m[9]*m[14] - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9];
+            inv[2] = m[1]*m[6]*m[15] - m[1]*m[7]*m[14] - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7] - m[13]*m[3]*m[6];
+            inv[6] = -m[0]*m[6]*m[15] + m[0]*m[7]*m[14] + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7] + m[12]*m[3]*m[6];
+            inv[10] = m[0]*m[5]*m[15] - m[0]*m[7]*m[13] - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7] - m[12]*m[3]*m[5];
+            inv[14] = -m[0]*m[5]*m[14] + m[0]*m[6]*m[13] + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6] + m[12]*m[2]*m[5];
+            inv[3] = -m[1]*m[6]*m[11] + m[1]*m[7]*m[10] + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7] + m[9]*m[3]*m[6];
+            inv[7] = m[0]*m[6]*m[11] - m[0]*m[7]*m[10] - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7] - m[8]*m[3]*m[6];
+            inv[11] = -m[0]*m[5]*m[11] + m[0]*m[7]*m[9] + m[4]*m[1]*m[11] - m[4]*m[3]*m[9] - m[8]*m[1]*m[7] + m[8]*m[3]*m[5];
+            inv[15] = m[0]*m[5]*m[10] - m[0]*m[6]*m[9] - m[4]*m[1]*m[10] + m[4]*m[2]*m[9] + m[8]*m[1]*m[6] - m[8]*m[2]*m[5];
+
+            let det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12];
+            if (det === 0) return m;
+            det = 1.0 / det;
+            for (let i = 0; i < 16; i++) inv[i] *= det;
+            return inv;
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            canvas.style.width = window.innerWidth + 'px';
+            canvas.style.height = window.innerHeight + 'px';
+            gl.viewport(0, 0, canvas.width, canvas.height);
+        });
+
+        // Start game
+        updateHUD();
+        updatePitchTypeDisplay();
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        render();
+    </script>
+</body>
+</html>
