@@ -7,15 +7,17 @@
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { background: #0a0a0a; color: #e0e0e0; font-family: 'SF Mono', 'Fira Code', monospace; }
-#bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; }
-.content { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-h1 { font-size: 3rem; font-weight: 300; letter-spacing: 0.3em; text-transform: uppercase; color: #00d2a0; margin-bottom: 0.5em; }
-p { font-size: 0.9rem; opacity: 0.5; letter-spacing: 0.1em; }
-.gallery { margin-top: 3em; display: flex; gap: 1.5em; flex-wrap: wrap; justify-content: center; }
-.card { width: 280px; height: 180px; border: 1px solid rgba(0,210,160,0.2); border-radius: 8px; overflow: hidden; position: relative; background: #111; transition: border-color 0.3s; }
-.card:hover { border-color: rgba(0,210,160,0.6); }
-.card canvas { width: 100%; height: 100%; }
-.card .label { position: absolute; bottom: 0; left: 0; right: 0; padding: 8px 12px; background: rgba(0,0,0,0.7); font-size: 0.7rem; letter-spacing: 0.05em; }
+#bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; opacity: 0.4; }
+.content { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2em 1em; }
+h1 { font-size: clamp(1.5rem, 5vw, 3rem); font-weight: 300; letter-spacing: 0.3em; text-transform: uppercase; color: #00d2a0; margin-bottom: 0.3em; }
+p { font-size: 0.9rem; opacity: 0.5; letter-spacing: 0.1em; text-align: center; max-width: 30em; }
+.gallery { margin-top: 2.5em; display: flex; gap: 1.5em; flex-wrap: wrap; justify-content: center; }
+.card { width: min(280px, 85vw); border: 1px solid rgba(0,210,160,0.2); border-radius: 8px; overflow: hidden; position: relative; background: #111; transition: border-color 0.3s, transform 0.2s; text-decoration: none; color: inherit; display: block; }
+.card:hover { border-color: rgba(0,210,160,0.6); transform: translateY(-2px); }
+.card img { width: 100%; height: 180px; object-fit: cover; display: block; }
+.card .label { padding: 12px; font-size: 0.75rem; letter-spacing: 0.05em; color: #ccc; }
+.card .meta { padding: 0 12px 12px; font-size: 0.65rem; opacity: 0.4; }
+.nav-link { margin-top: 2em; font-size: 0.75rem; opacity: 0.4; letter-spacing: 0.1em; }
 a { color: #00d2a0; text-decoration: none; }
 a:hover { text-decoration: underline; }
 </style>
@@ -24,17 +26,20 @@ a:hover { text-decoration: underline; }
 <canvas id="bg"></canvas>
 <div class="content">
   <h1>Smithers Toys</h1>
-  <p>WebGL experiments, generated and validated by AI workflows</p>
+  <p>WebGL experiments, generated and validated by AI workflows running in a TEE</p>
   <div class="gallery">
     <a href="demos/001-mandelbrot/index.html" class="card">
-      <canvas id="preview1"></canvas>
+      <img src="screenshots/mandelbrot.png" alt="Mandelbrot fractal zoom" loading="lazy">
       <div class="label">001 — Mandelbrot Zoom</div>
+      <div class="meta">GPU-computed fractal with smooth coloring</div>
     </a>
     <a href="demos/002-baseball/index.html" class="card">
-      <canvas id="preview2"></canvas>
+      <img src="screenshots/baseball.png" alt="WebGL baseball game" loading="lazy">
       <div class="label">002 — WebGL Baseball</div>
+      <div class="meta">3D baseball with pitch physics and bat swings</div>
     </a>
   </div>
+  <div class="nav-link"><a href="report.html">design report</a></div>
 </div>
 
 <script id="bg-vs" type="x-shader/x-vertex">

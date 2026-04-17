@@ -2,18 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>002 — WebGL Baseball</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #000; overflow: hidden; }
+body { background: #000; overflow: hidden; touch-action: none; }
 canvas { width: 100vw; height: 100vh; display: block; }
 #hud { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); color: #fff; font: bold 14px monospace; text-align: center; z-index: 2; pointer-events: none; }
 #hud .score { font-size: 24px; letter-spacing: 0.2em; }
 #hud .count { font-size: 12px; opacity: 0.7; margin-top: 4px; }
 #msg { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #ffcc00; font: bold 32px monospace; z-index: 2; pointer-events: none; opacity: 0; transition: opacity 0.3s; text-shadow: 0 0 20px rgba(255,200,0,0.5); }
 #msg.show { opacity: 1; }
-#hint { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.3); font: 11px monospace; z-index: 2; pointer-events: none; }
+#hint { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.3); font: 11px monospace; z-index: 2; pointer-events: none; white-space: nowrap; text-align: center; max-width: 90vw; }
 </style>
 </head>
 <body>
@@ -23,7 +23,7 @@ canvas { width: 100vw; height: 100vh; display: block; }
   <div class="count" id="count">B:0 S:0 O:0</div>
 </div>
 <div id="msg"></div>
-<div id="hint">click to pitch · move mouse to aim bat · click to swing</div>
+<div id="hint">tap right side to pitch · drag left side to aim · tap left side to swing</div>
 
 <script>
 const canvas = document.getElementById('c');
@@ -32,12 +32,12 @@ const gl = canvas.getContext('webgl');
 // --- State ---
 let balls = 0, strikes = 0, outs = 0;
 let awayRuns = 0, homeRuns = 0;
-let inning = 1, halfInning = 0; // 0=top, 1=bottom
+let inning = 1, halfInning = 0;
 let pitchInFlight = false, swingDone = false;
 let pitchTime = 0, swingTime = 0;
-let pitchType = 0; // 0=fastball, 1=curve, 2=slider
+let pitchType = 0;
 let pitchResult = '';
-let mouseX = 0, mouseY = 0;
+let mouseX = innerWidth / 2, mouseY = innerHeight / 2;
 let showMessage = '', messageTimer = 0;
 
 // Ball physics
@@ -127,6 +127,7 @@ function mat4Translate(x,y,z) { const m = mat4Identity(); m[12]=x; m[13]=y; m[14
 function mat4Scale(s) { const m = mat4Identity(); m[0]=m[5]=m[10]=s; return m; }
 function mat4RotX(a) { const m=mat4Identity(),c=Math.cos(a),s=Math.sin(a); m[5]=c;m[6]=s;m[9]=-s;m[10]=c; return m; }
 function mat4RotY(a) { const m=mat4Identity(),c=Math.cos(a),s=Math.sin(a); m[0]=c;m[2]=-s;m[8]=s;m[10]=c; return m; }
+function mat4RotZ(a) { const m=mat4Identity(),c=Math.cos(a),s=Math.sin(a); m[0]=c;m[1]=s;m[4]=-s;m[5]=c; return m; }
 
 function normalize(v) { const l = Math.sqrt(dot(v,v)); return l > 0 ? [v[0]/l,v[1]/l,v[2]/l] : [0,0,0]; }
 function sub(a,b) { return [a[0]-b[0],a[1]-b[1],a[2]-b[2]]; }
@@ -175,14 +176,10 @@ function createBox(sx, sy, sz) {
 }
 
 function createDiamond() {
-  // Baseball diamond: home plate at origin, first at (90,0,0) etc
-  // Scaled: 1 unit = ~90ft
   const pos = [], norm = [];
-  // Ground quad (outfield)
   const sz = 2.5;
   pos.push(-sz,0,-sz, sz,0,-sz, sz,0,sz, -sz,0,-sz, sz,0,sz, -sz,0,sz);
   for (let i = 0; i < 6; i++) norm.push(0,1,0);
-  // Infield dirt (slightly raised brown)
   const d = 0.5;
   pos.push(-d,0.001,-d, d,0.001,-d, d,0.001,d, -d,0.001,-d, d,0.001,d, -d,0.001,d);
   for (let i = 0; i < 6; i++) norm.push(0,1,0);
@@ -194,11 +191,9 @@ function createCylinder(seg, h, r) {
   for (let i = 0; i < seg; i++) {
     const a1 = 2*Math.PI*i/seg, a2 = 2*Math.PI*(i+1)/seg;
     const c1=Math.cos(a1),s1=Math.sin(a1),c2=Math.cos(a2),s2=Math.sin(a2);
-    // side
     pos.push(r*c1,0,r*s1, r*c2,0,r*s2, r*c2,h,r*s2);
     pos.push(r*c1,0,r*s1, r*c2,h,r*s2, r*c1,h,r*s1);
     norm.push(c1,0,s1, c2,0,s2, c2,0,s2, c1,0,s1, c2,0,s2, c1,0,s1);
-    // top
     pos.push(0,h,0, r*c1,h,r*s1, r*c2,h,r*s2);
     norm.push(0,1,0, 0,1,0, 0,1,0);
   }
@@ -306,7 +301,6 @@ function pitch() {
 }
 
 function checkHit() {
-  // Bat at mouseX/mouseY position
   const batX = (mouseX / innerWidth - 0.5) * 2.0;
   const batY = 1.0 + (1.0 - mouseY / innerHeight) * 1.2;
 
@@ -316,14 +310,12 @@ function checkHit() {
   const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
   if (dist < 0.5) {
-    // HIT
     const power = 0.3 + Math.random() * 0.2;
     const angle = (Math.random() - 0.5) * 1.2;
     ballVel = [angle * 0.15, power * 0.4, -power];
     msg(Math.random() > 0.5 ? 'CRACK!' : 'BASE HIT!');
     pitchResult = 'hit';
 
-    // Score on hits (simplified)
     setTimeout(() => {
       if (halfInning === 0) awayRuns++;
       else homeRuns++;
@@ -339,7 +331,6 @@ function checkHit() {
 
 function resolvePitch() {
   if (pitchResult) return;
-  // Strike zone check
   const inZone = Math.abs(ballPos[0]) < 0.4 && ballPos[1] > 1.0 && ballPos[1] < 2.0;
 
   if (inZone) {
@@ -378,7 +369,7 @@ function resolvePitch() {
   pitchResult = '';
 }
 
-// --- Input ---
+// --- Input (Mouse + Touch) ---
 canvas.addEventListener('click', () => {
   if (!pitchInFlight) {
     pitch();
@@ -393,10 +384,39 @@ canvas.addEventListener('mousemove', e => {
   mouseY = e.clientY;
 });
 
+// Touch: left half = aim+swing, right half = pitch
+let touchId = null;
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  mouseX = t.clientX;
+  mouseY = t.clientY;
+
+  if (t.clientX < innerWidth * 0.5) {
+    // Left side: aim and swing
+    if (pitchInFlight && !swingDone) {
+      swingDone = true;
+      swingTime = 0;
+      checkHit();
+    }
+  } else {
+    // Right side: pitch
+    if (!pitchInFlight) pitch();
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  mouseX = t.clientX;
+  mouseY = t.clientY;
+}, { passive: false });
+
 // --- Main loop ---
+const maxDPR = Math.min(devicePixelRatio, 2);
 function resize() {
-  canvas.width = innerWidth * devicePixelRatio;
-  canvas.height = innerHeight * devicePixelRatio;
+  canvas.width = innerWidth * maxDPR;
+  canvas.height = innerHeight * maxDPR;
   gl.viewport(0, 0, canvas.width, canvas.height);
 }
 resize();
@@ -412,36 +432,30 @@ function frame(now) {
   const t = (now - startTime) * 0.001;
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  // Camera behind home plate, looking toward pitcher
   const eye = [0, 2.0, 1.5];
   const center = [0, 1.2, 14];
   const proj = mat4Perspective(Math.PI / 3, canvas.width / canvas.height, 0.1, 100);
   const view = mat4LookAt(eye, center, [0,1,0]);
   const vp = mat4Mul(proj, view);
 
-  // Draw ground
+  // Ground
   draw(vp, mat4Identity(), [0.18, 0.55, 0.18], diamondPosBuf, diamondNormBuf, diamondCount, null);
-  // Infield dirt
-  const dirtBuf = createDiamond();
-  // Draw bases
-  const basePositions = [[0.45, 0.02, 13.5], [0.45, 0.02, 12.6], [-0.45, 0.02, 12.6], [0, 0.02, 11.7]]; // home, 1st, 2nd, 3rd (approx)
+  // Bases
+  const basePositions = [[0.45, 0.02, 13.5], [0.45, 0.02, 12.6], [-0.45, 0.02, 12.6], [0, 0.02, 11.7]];
   for (const bp of basePositions) {
     draw(vp, mat4Translate(bp[0],bp[1],bp[2]), [1,1,1], basePosBuf, baseNormBuf, baseCount, null);
   }
   // Pitcher mound
   draw(vp, mat4Translate(0, 0, 13), [0.55, 0.35, 0.2], moundPosBuf, moundNormBuf, moundCount, null);
 
-  // Pitcher (simple figure - body)
+  // Pitcher
   const pitcherModel = mat4Mul(mat4Translate(0, 0.7, 13.3), mat4Scale(0.3));
   draw(vp, pitcherModel, [0.2, 0.2, 0.6], spherePosBuf, sphereNormBuf, sphereCount, sphereIdxBuf);
-  // Pitcher body
   draw(vp, mat4Mul(mat4Translate(0, 0.3, 13.3), mat4Scale(0.25)), [1,1,1], spherePosBuf, sphereNormBuf, sphereCount, sphereIdxBuf);
 
-  // Batter (at home plate area)
+  // Batter
   const batterX = (mouseX / innerWidth - 0.5) * 0.6;
-  // Batter head
   draw(vp, mat4Mul(mat4Translate(batterX, 0.85, 1.8), mat4Scale(0.25)), [0.85, 0.65, 0.5], spherePosBuf, sphereNormBuf, sphereCount, sphereIdxBuf);
-  // Batter body
   draw(vp, mat4Mul(mat4Translate(batterX, 0.4, 1.8), mat4Scale(0.3)), [0.15, 0.15, 0.15], spherePosBuf, sphereNormBuf, sphereCount, sphereIdxBuf);
 
   // Bat
@@ -461,12 +475,10 @@ function frame(now) {
     ballPos[1] += ballVel[1];
     ballPos[2] += ballVel[2];
 
-    // Gravity for hits
     if (pitchResult === 'hit') {
       ballVel[1] -= 0.004;
     }
 
-    // Curve ball effect
     if (pitchType === 1 && pitchResult !== 'hit') {
       ballVel[0] += 0.001 * Math.sin(pitchTime * 0.1);
     }
@@ -474,16 +486,10 @@ function frame(now) {
     const ballModel = mat4Mul(mat4Translate(ballPos[0], ballPos[1], ballPos[2]), mat4Scale(0.07));
     draw(vp, ballModel, [1, 1, 1], ballPosBuf, ballNormBuf, ballCount, ballIdxBuf);
 
-    // Pitch crosses plate
     if (!pitchResult && ballPos[2] < 1.0) {
       resolvePitch();
     }
-    // Ball goes too far (miss or foul)
-    if (pitchResult === 'hit' && (ballPos[1] < -1 || Math.abs(ballPos[0]) > 5 || ballPos[2] < -5)) {
-      // already handled by timeout
-    }
   } else {
-    // Show ball in pitcher's hand
     draw(vp, mat4Mul(mat4Translate(0.2, 1.0, 13.3), mat4Scale(0.06)), [1,1,1], ballPosBuf, ballNormBuf, ballCount, ballIdxBuf);
   }
 

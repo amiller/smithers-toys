@@ -2,18 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>001 — Mandelbrot Zoom</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #000; overflow: hidden; }
+body { background: #000; overflow: hidden; touch-action: none; }
 canvas { width: 100vw; height: 100vh; display: block; }
-.info { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.4); font: 11px monospace; letter-spacing: 0.05em; z-index: 1; pointer-events: none; }
+.info { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.4); font: 11px monospace; letter-spacing: 0.05em; z-index: 1; pointer-events: none; white-space: nowrap; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div class="info">scroll to zoom · drag to pan · r to reset</div>
+<div class="info">scroll/pinch to zoom · drag to pan · double-tap to reset</div>
 <script>
 const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl');
@@ -85,32 +85,87 @@ let center = [-0.745, 0.186];
 let zoom = 0.8;
 let targetZoom = zoom;
 let targetCenter = [...center];
-let dragging = false, lastMouse = [0, 0];
+let dragging = false, lastPointer = [0, 0];
 const start = performance.now();
 
+// Clamp DPR for mobile performance
+const maxDPR = Math.min(devicePixelRatio, 2);
+
 function resize() {
-  canvas.width = innerWidth * devicePixelRatio;
-  canvas.height = innerHeight * devicePixelRatio;
+  canvas.width = innerWidth * maxDPR;
+  canvas.height = innerHeight * maxDPR;
   gl.viewport(0, 0, canvas.width, canvas.height);
 }
 resize(); addEventListener('resize', resize);
 
+// --- Mouse input (desktop) ---
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
   const f = e.deltaY > 0 ? 0.85 : 1.18;
   targetZoom *= f;
 }, { passive: false });
 
-canvas.addEventListener('mousedown', e => { dragging = true; lastMouse = [e.clientX, e.clientY]; });
+canvas.addEventListener('mousedown', e => { dragging = true; lastPointer = [e.clientX, e.clientY]; });
 addEventListener('mouseup', () => { dragging = false; });
 addEventListener('mousemove', e => {
   if (!dragging) return;
   const s = 1.0 / (zoom * Math.min(innerWidth, innerHeight));
-  targetCenter[0] -= (e.clientX - lastMouse[0]) * s;
-  targetCenter[1] += (e.clientY - lastMouse[1]) * s;
-  lastMouse = [e.clientX, e.clientY];
+  targetCenter[0] -= (e.clientX - lastPointer[0]) * s;
+  targetCenter[1] += (e.clientY - lastPointer[1]) * s;
+  lastPointer = [e.clientX, e.clientY];
 });
 
+// --- Touch input (mobile) ---
+let lastTouches = [];
+let lastPinchDist = 0;
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (e.touches.length === 1) {
+    dragging = true;
+    lastPointer = [e.touches[0].clientX, e.touches[0].clientY];
+  } else if (e.touches.length === 2) {
+    dragging = false;
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    lastPinchDist = Math.sqrt(dx * dx + dy * dy);
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (e.touches.length === 1 && dragging) {
+    const s = 1.0 / (zoom * Math.min(innerWidth, innerHeight));
+    targetCenter[0] -= (e.touches[0].clientX - lastPointer[0]) * s;
+    targetCenter[1] += (e.touches[0].clientY - lastPointer[1]) * s;
+    lastPointer = [e.touches[0].clientX, e.touches[0].clientY];
+  } else if (e.touches.length === 2) {
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (lastPinchDist > 0) {
+      targetZoom *= dist / lastPinchDist;
+    }
+    lastPinchDist = dist;
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  if (e.touches.length < 2) lastPinchDist = 0;
+  if (e.touches.length === 0) dragging = false;
+});
+
+// Double-tap to reset
+let lastTap = 0;
+canvas.addEventListener('touchend', e => {
+  const now = Date.now();
+  if (now - lastTap < 300) {
+    targetCenter = [-0.745, 0.186]; targetZoom = 0.8;
+  }
+  lastTap = now;
+});
+
+// Keyboard reset (desktop)
 addEventListener('keydown', e => {
   if (e.key === 'r') { targetCenter = [-0.745, 0.186]; targetZoom = 0.8; }
 });
