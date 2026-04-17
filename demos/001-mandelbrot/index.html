@@ -88,7 +88,6 @@ let targetCenter = [...center];
 let dragging = false, lastPointer = [0, 0];
 const start = performance.now();
 
-// Clamp DPR for mobile performance
 const maxDPR = Math.min(devicePixelRatio, 2);
 
 function resize() {
@@ -98,11 +97,33 @@ function resize() {
 }
 resize(); addEventListener('resize', resize);
 
+// Convert screen coords to complex plane coords at current zoom/center
+function screenToComplex(sx, sy) {
+  const minDim = Math.min(innerWidth, innerHeight);
+  // UV offset from screen center, in complex plane units
+  const uvx = (sx - innerWidth / 2) / minDim;
+  const uvy = -(sy - innerHeight / 2) / minDim; // flip Y
+  return [center[0] + uvx / zoom, center[1] + uvy / zoom];
+}
+
+// Zoom while keeping the given complex point fixed on screen
+function zoomAt(sx, sy, factor) {
+  const [cx, cy] = screenToComplex(sx, sy);
+  targetZoom *= factor;
+  // After zoom, we want (cx,cy) to still map to (sx,sy)
+  // new_center = complex_pt - uv_offset / new_zoom
+  const minDim = Math.min(innerWidth, innerHeight);
+  const uvx = (sx - innerWidth / 2) / minDim;
+  const uvy = -(sy - innerHeight / 2) / minDim;
+  targetCenter[0] = cx - uvx / targetZoom;
+  targetCenter[1] = cy - uvy / targetZoom;
+}
+
 // --- Mouse input (desktop) ---
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
-  const f = e.deltaY > 0 ? 0.85 : 1.18;
-  targetZoom *= f;
+  const factor = e.deltaY > 0 ? 0.85 : 1.18;
+  zoomAt(e.clientX, e.clientY, factor);
 }, { passive: false });
 
 canvas.addEventListener('mousedown', e => { dragging = true; lastPointer = [e.clientX, e.clientY]; });
@@ -116,8 +137,8 @@ addEventListener('mousemove', e => {
 });
 
 // --- Touch input (mobile) ---
-let lastTouches = [];
 let lastPinchDist = 0;
+let pinchCenter = [0, 0];
 
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
@@ -129,6 +150,10 @@ canvas.addEventListener('touchstart', e => {
     const dx = e.touches[0].clientX - e.touches[1].clientX;
     const dy = e.touches[0].clientY - e.touches[1].clientY;
     lastPinchDist = Math.sqrt(dx * dx + dy * dy);
+    pinchCenter = [
+      (e.touches[0].clientX + e.touches[1].clientX) / 2,
+      (e.touches[0].clientY + e.touches[1].clientY) / 2
+    ];
   }
 }, { passive: false });
 
@@ -143,10 +168,14 @@ canvas.addEventListener('touchmove', e => {
     const dx = e.touches[0].clientX - e.touches[1].clientX;
     const dy = e.touches[0].clientY - e.touches[1].clientY;
     const dist = Math.sqrt(dx * dx + dy * dy);
+    const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+    const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
     if (lastPinchDist > 0) {
-      targetZoom *= dist / lastPinchDist;
+      const factor = dist / lastPinchDist;
+      zoomAt(midX, midY, factor);
     }
     lastPinchDist = dist;
+    pinchCenter = [midX, midY];
   }
 }, { passive: false });
 
