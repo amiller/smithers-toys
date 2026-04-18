@@ -51,6 +51,7 @@ let telemetryInterval = null;
 let msgCount = 0;
 let currentRoomId = null;
 let lastStructuredData = null;
+let lastTelemetryTs = 0;
 
 const TELEMETRY_INTERVAL_MS = 30000; // auto-refresh every 30s while visible
 
@@ -132,13 +133,17 @@ function updateStatCards(body) {
 function updateProcessTable(processes) {
   const tbody = document.getElementById('procBody');
   if (!tbody || !processes || !processes.length) return;
-  tbody.innerHTML = processes.map(p => `
-    <tr>
+  tbody.innerHTML = processes.map(p => {
+    const cmdline = p.cmdline ? `<span class="proc-cmdline" title="${escapeHtml(p.cmdline)}">${escapeHtml(p.cmdline)}</span>` : '';
+    return `<tr>
       <td>${escapeHtml(String(p.pid))}</td>
-      <td>${escapeHtml(p.name)}</td>
+      <td>
+        <span class="proc-name">${escapeHtml(p.name)}</span>
+        ${cmdline}
+      </td>
       <td>${p.rss_mb.toFixed ? p.rss_mb.toFixed(0) : p.rss_mb} MB</td>
-    </tr>
-  `).join('');
+    </tr>`;
+  }).join('');
   document.getElementById('procCount').textContent = processes.length;
 }
 
@@ -155,7 +160,10 @@ function updateSmithersPanel(smithers) {
     const latest = runs[0];
     const isRunning = latest.status === 'running';
 
-    // Run header
+    // Find the actively running node
+    const activeNode = nodes.find(n => n.is_live) || nodes.find(n => n.state === 'in-progress') || null;
+    const activeInfo = activeNode ? buildActiveTaskHtml(activeNode) : '';
+
     const runEl = document.getElementById('smithersRun') || document.createElement('div');
     runEl.id = 'smithersRun';
     runEl.className = 'smithers-run';
@@ -166,16 +174,20 @@ function updateSmithersPanel(smithers) {
         <span class="smithers-runtime">${formatDuration(latest.runtime_sec)}</span>
         <span class="smithers-run-id">${escapeHtml(latest.run_id.slice(-6))}</span>
       </div>
+      ${activeInfo}
       <div class="smithers-nodes">
         ${nodes.map(n => {
+          const isLive = n.is_live;
           const stateClass = n.state === 'finished' ? 'complete' :
-                             n.state === 'in-progress' ? 'running' :
+                             n.state === 'in-progress' || isLive ? 'running' :
                              n.state === 'failed' ? 'failed' : 'pending';
           const elapsed = n.elapsed_sec ? formatDuration(n.elapsed_sec) : '';
           const errorTag = n.error ? `<span class="node-error">${escapeHtml(n.error)}</span>` : '';
+          const liveDot = isLive ? '<span class="live-dot"></span>' : '';
           return `<div class="smithers-node ${stateClass}">
+            ${liveDot}
             <span class="node-id">${escapeHtml(n.id)}</span>
-            <span class="status-badge ${stateClass}">${escapeHtml(n.state)}</span>
+            <span class="status-badge ${stateClass}">${escapeHtml(isLive ? 'live' : n.state)}</span>
             ${elapsed ? `<span class="node-elapsed">${elapsed}</span>` : ''}
             ${errorTag}
           </div>`;
@@ -189,21 +201,73 @@ function updateSmithersPanel(smithers) {
   panel.style.display = '';
 }
 
+function buildActiveTaskHtml(node) {
+  let details = [];
+  if (node.editing) {
+    details.push(`<div class="active-detail"><span class="active-label">editing</span> <code>${escapeHtml(node.editing.split('/').slice(-2).join('/'))}</code></div>`);
+  }
+  if (node.thinking) {
+    details.push(`<div class="active-detail"><span class="active-label">thinking</span> ${escapeHtml(node.thinking)}</div>`);
+  }
+  if (node.last_action) {
+    details.push(`<div class="active-detail"><span class="active-label">action</span> ${escapeHtml(node.last_action)}</div>`);
+  }
+  if (node.last_output && !node.thinking) {
+    details.push(`<div class="active-detail"><span class="active-label">output</span> ${escapeHtml(node.last_output)}</div>`);
+  }
+
+  if (!details.length) return '';
+
+  return `<div class="active-task">
+    <div class="active-task-header">
+      <span class="live-dot"></span>
+      <span class="active-task-name">${escapeHtml(node.id)}</span>
+      ${node.stale_sec != null ? `<span class="active-task-age">${node.stale_sec < 5 ? 'now' : node.stale_sec + 's ago'}</span>` : ''}
+    </div>
+    ${details.join('')}
+  </div>`;
+}
+
 function handleStructuredTelemetry(data) {
   if (!data || data.type !== 'cvm_telemetry') return;
   lastStructuredData = data;
+  lastTelemetryTs = Date.now();
+
+  // Flash the update indicator
+  const indicator = document.getElementById('updateFlash');
+  if (indicator) {
+    indicator.classList.remove('flash');
+    void indicator.offsetWidth; // reflow
+    indicator.classList.add('flash');
+  }
 
   // Update stat cards from structured data
   const s = data.system;
   document.getElementById('cpuVal').textContent = s.cpu_pct + '%';
-  document.getElementById('memVal').textContent = `${Math.round(s.mem_available_mb)}/${Math.round(s.mem_total_mb)} MB`;
+  document.getElementById('memVal').textContent = `${Math.round(s.mem_total_mb - s.mem_available_mb)}/${Math.round(s.mem_total_mb)} MB`;
   document.getElementById('diskVal').textContent = `${s.disk_used}/${s.disk_total}`;
+  document.getElementById('loadVal').textContent = s.load_1m;
 
   // Update process table
   updateProcessTable(data.processes);
 
   // Update smithers panel
   updateSmithersPanel(data.smithers);
+
+  // Start countdown to next update
+  startCountdown();
+}
+
+function startCountdown() {
+  const el = document.getElementById('nextUpdate');
+  if (!el) return;
+  const target = Date.now() + TELEMETRY_INTERVAL_MS;
+  if (window._countdownInterval) clearInterval(window._countdownInterval);
+  window._countdownInterval = setInterval(() => {
+    const remaining = Math.max(0, Math.round((target - Date.now()) / 1000));
+    el.textContent = remaining + 's';
+    if (remaining <= 0) clearInterval(window._countdownInterval);
+  }, 1000);
 }
 
 function buildMessageHtml(event) {
@@ -248,27 +312,9 @@ function buildMessageHtml(event) {
 
   let telemHtml = '';
   if (isTelemetry) {
-    // If we have structured data, render a richer card
-    if (lastStructuredData) {
-      const sd = lastStructuredData.system;
-      telemHtml = `<div class="telemetry-grid">
-        <div class="telem-item"><div class="tl">CPU</div><div class="tv">${escapeHtml(String(sd.cpu_pct))}%</div></div>
-        <div class="telem-item"><div class="tl">Memory</div><div class="tv">${Math.round(sd.mem_available_mb)}/${Math.round(sd.mem_total_mb)} MB</div></div>
-        <div class="telem-item"><div class="tl">Load</div><div class="tv">${escapeHtml(sd.load_1m)}</div></div>
-        <div class="telem-item"><div class="tl">Uptime</div><div class="tv">${sd.uptime_hours}h</div></div>
-        <div class="telem-item"><div class="tl">Disk</div><div class="tv">${escapeHtml(sd.disk_used)}/${escapeHtml(sd.disk_total)}</div></div>
-        <div class="telem-item"><div class="tl">Net I/O</div><div class="tv">↓${sd.net_rx_mb} ↑${sd.net_tx_mb} MB</div></div>
-      </div>`;
-    } else {
-      // Fallback: parse plain text
-      const t = parseTelemetry(content.body);
-      const keys = Object.keys(t).filter(k => k !== 'timestamp' && !k.includes('smithers') && !k.includes('telemetry'));
-      if (keys.length > 0) {
-        telemHtml = '<div class="telemetry-grid">' +
-          keys.map(k => `<div class="telem-item"><div class="tl">${escapeHtml(k)}</div><div class="tv">${escapeHtml(t[k])}</div></div>`).join('') +
-          '</div>';
-      }
-    }
+    // Telemetry card is now rendered by handleStructuredTelemetry into the panels.
+    // The message feed card just shows a minimal summary.
+    telemHtml = '<div class="telem-updated">updated above</div>';
   }
 
   return {
@@ -434,6 +480,7 @@ function clearFeed() {
   document.getElementById('cpuVal').textContent = '--';
   document.getElementById('memVal').textContent = '--';
   document.getElementById('diskVal').textContent = '--';
+  document.getElementById('loadVal').textContent = '--';
   document.getElementById('procBody').innerHTML = '';
   document.getElementById('procCount').textContent = '0';
   document.getElementById('smithersPanel').style.display = 'none';
