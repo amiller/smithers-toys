@@ -125,6 +125,8 @@ function buildMessageHtml(event) {
   if (!content || !content.body) return null;
 
   const isTelemetry = content.body.includes('CVM Telemetry');
+  const isTelemetryRequest = content.body.trim() === '!telemetry';
+  if (isTelemetryRequest) return null;  // Don't render ping commands
   const sender = (event.getSender ? event.getSender() : event.sender) || 'unknown';
   const ts = (event.getDate ? event.getDate() : null) ||
              (event.origin_server_ts ? new Date(event.origin_server_ts) : new Date());
