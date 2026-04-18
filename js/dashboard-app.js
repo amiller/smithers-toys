@@ -47,7 +47,40 @@ tokenInput.value = localStorage.getItem(TOKEN_KEY) || '';
 let client = null;
 let connectedAt = null;
 let uptimeInterval = null;
+let telemetryInterval = null;
 let msgCount = 0;
+let currentRoomId = null;
+
+const TELEMETRY_INTERVAL_MS = 30000; // auto-refresh every 30s while visible
+
+async function requestTelemetry() {
+  if (!client || !currentRoomId) return;
+  const txnId = 'cmd-' + Date.now();
+  try {
+    await client.sendEvent(currentRoomId, 'm.room.message', {
+      msgtype: 'm.text',
+      body: '!telemetry',
+    }, txnId);
+    console.log('Sent !telemetry command');
+  } catch (err) {
+    console.error('Failed to send !telemetry:', err);
+  }
+}
+window.requestTelemetry = requestTelemetry;
+
+function startTelemetryPoll() {
+  stopTelemetryPoll();
+  // Initial request
+  requestTelemetry();
+  // Auto-refresh on interval, paused when tab is hidden
+  telemetryInterval = setInterval(() => {
+    if (!document.hidden) requestTelemetry();
+  }, TELEMETRY_INTERVAL_MS);
+}
+
+function stopTelemetryPoll() {
+  if (telemetryInterval) { clearInterval(telemetryInterval); telemetryInterval = null; }
+}
 
 function setStatus(state, text) {
   document.getElementById('statusDot').className = 'status-dot ' + state;
@@ -207,6 +240,8 @@ async function connect() {
   localStorage.setItem(TOKEN_KEY, token);
 
   if (client) { client.stopClient(); client = null; }
+  stopTelemetryPoll();
+  currentRoomId = room;
 
   setStatus('connecting', 'Connecting...');
   showError('');
@@ -258,6 +293,8 @@ async function connect() {
         if (roomObj) {
           roomObj.getLiveTimeline().getEvents().forEach(ev => renderMessage(ev));
         }
+        // Start on-demand telemetry polling
+        startTelemetryPoll();
       } else if (state === 'ERROR') {
         setStatus('', 'Sync Error');
         showError('Sync error: ' + (data?.error || 'unknown'));
