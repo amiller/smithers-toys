@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smithers Dashboard</title>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --surface2: #1a1a28;
+      --border: #2a2a3a;
+      --text: #e0e0e8;
+      --text-dim: #8888a0;
+      --accent: #6c5ce7;
+      --accent-glow: rgba(108, 92, 231, 0.15);
+      --green: #00b894;
+      --yellow: #fdcb6e;
+      --red: #ff6b6b;
+      --blue: #74b9ff;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+      min-height: 100vh;
+    }
+    .header {
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: var(--surface);
+    }
+    .header .logo {
+      width: 30px; height: 30px;
+      background: var(--accent);
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px; font-weight: 700; color: white;
+    }
+    .header h1 { font-size: 16px; font-weight: 600; letter-spacing: -0.02em; }
+    .status-bar {
+      display: flex; align-items: center; gap: 8px;
+      margin-left: auto; font-size: 11px; color: var(--text-dim);
+    }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--red); transition: background 0.3s;
+    }
+    .status-dot.connected { background: var(--green); }
+    .status-dot.connecting { background: var(--yellow); animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .lock { font-size: 12px; }
+    .lock.unlocked { color: var(--red); }
+    .lock.locked { color: var(--green); }
+
+    .container { max-width: 960px; margin: 0 auto; padding: 20px 24px; }
+
+    .config-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 18px;
+      margin-bottom: 20px;
+    }
+    .config-panel h2 {
+      font-size: 11px; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-dim); margin-bottom: 12px;
+    }
+    .config-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+    .config-field { flex: 1; min-width: 180px; }
+    .config-field label {
+      display: block; font-size: 10px; color: var(--text-dim);
+      margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .config-field input {
+      width: 100%; background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 5px;
+      padding: 7px 10px; color: var(--text);
+      font-family: inherit; font-size: 12px;
+    }
+    .config-field input:focus {
+      outline: none; border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .btn {
+      padding: 7px 16px; border: 1px solid var(--border); border-radius: 5px;
+      background: var(--surface2); color: var(--text);
+      font-family: inherit; font-size: 12px; cursor: pointer;
+      transition: all 0.15s; white-space: nowrap;
+    }
+    .btn:hover { background: var(--border); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
+    .btn.primary:hover { opacity: 0.85; }
+
+    .stats-row {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 10px; margin-bottom: 20px;
+    }
+    .stat-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px 14px;
+    }
+    .stat-card .label {
+      font-size: 10px; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .stat-card .value { font-size: 18px; font-weight: 700; margin-top: 2px; }
+    .stat-card .value.small { font-size: 13px; font-weight: 400; }
+
+    .feed-header {
+      display: flex; justify-content: space-between;
+      align-items: center; margin-bottom: 10px;
+    }
+    .feed-header h2 {
+      font-size: 11px; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-dim);
+    }
+    .feed { display: flex; flex-direction: column; gap: 6px; }
+
+    .message-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px 14px;
+      animation: slideIn 0.2s ease-out;
+    }
+    .message-card.telemetry { border-left: 3px solid var(--accent); }
+    @keyframes slideIn {
+      from { opacity:0; transform:translateY(-6px); }
+      to { opacity:1; transform:translateY(0); }
+    }
+    .message-card .meta {
+      display: flex; justify-content: space-between;
+      align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 4px;
+    }
+    .message-card .sender { font-size: 11px; color: var(--accent); font-weight: 600; }
+    .message-card .time { font-size: 10px; color: var(--text-dim); }
+    .message-card .body {
+      font-size: 13px; line-height: 1.5;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .message-card .body code {
+      background: var(--surface2); padding: 1px 5px;
+      border-radius: 3px; font-size: 12px;
+    }
+    .status-badge {
+      display: inline-block; padding: 1px 7px; border-radius: 3px;
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .status-badge.running { background: rgba(116,185,255,0.15); color: var(--blue); }
+    .status-badge.complete { background: rgba(0,184,148,0.15); color: var(--green); }
+    .status-badge.failed { background: rgba(255,107,107,0.15); color: var(--red); }
+    .status-badge.pending { background: rgba(253,203,110,0.15); color: var(--yellow); }
+
+    .telemetry-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 6px; margin-top: 8px;
+    }
+    .telem-item {
+      background: var(--surface2); border-radius: 4px;
+      padding: 6px 8px;
+    }
+    .telem-item .tl { font-size: 9px; color: var(--text-dim); text-transform: uppercase; }
+    .telem-item .tv { font-size: 14px; font-weight: 600; margin-top: 1px; }
+
+    .empty-state {
+      text-align: center; padding: 40px 20px; color: var(--text-dim);
+    }
+    .empty-state .icon { font-size: 28px; margin-bottom: 10px; opacity: 0.5; }
+    .error-banner {
+      background: rgba(255,107,107,0.1);
+      border: 1px solid rgba(255,107,107,0.3);
+      border-radius: 6px; padding: 10px 14px;
+      margin-bottom: 14px; font-size: 12px; color: var(--red);
+      display: none;
+    }
+    @media (max-width: 640px) {
+      .container { padding: 12px; }
+      .header { padding: 12px; }
+      .config-row { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">S</div>
+  <h1>Smithers Dashboard</h1>
+  <div class="status-bar">
+    <span class="lock unlocked" id="lockIcon" title="Encryption status">&#9166;</span>
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Disconnected</span>
+  </div>
+</div>
+
+<div class="container">
+  <div class="config-panel" id="configPanel">
+    <h2>Connection</h2>
+    <div class="config-row">
+      <div class="config-field">
+        <label>Homeserver URL</label>
+        <input type="text" id="homeserver" placeholder="https://matrix.example.com">
+      </div>
+      <div class="config-field">
+        <label>Room ID</label>
+        <input type="text" id="roomId" placeholder="!abc123:example.com">
+      </div>
+      <div class="config-field" style="min-width:140px;flex:0.5">
+        <label>Access Token</label>
+        <input type="password" id="accessToken" placeholder="syt_...">
+      </div>
+      <button class="btn primary" id="connectBtn">Connect</button>
+    </div>
+  </div>
+
+  <div class="error-banner" id="errorBanner"></div>
+
+  <div class="stats-row" id="statsRow">
+    <div class="stat-card">
+      <div class="label">Messages</div>
+      <div class="value" id="msgCount">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Last Update</div>
+      <div class="value small" id="lastUpdate">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Uptime</div>
+      <div class="value small" id="uptime">--</div>
+    </div>
+    <div class="stat-card" id="cpuCard">
+      <div class="label">CPU</div>
+      <div class="value" id="cpuVal">--</div>
+    </div>
+    <div class="stat-card" id="memCard">
+      <div class="label">Memory</div>
+      <div class="value" id="memVal">--</div>
+    </div>
+    <div class="stat-card" id="diskCard">
+      <div class="label">Disk</div>
+      <div class="value small" id="diskVal">--</div>
+    </div>
+  </div>
+
+  <div class="feed-header">
+    <h2>Live Feed</h2>
+    <button class="btn" id="clearBtn" style="padding:3px 10px;font-size:10px">Clear</button>
+  </div>
+
+  <div class="feed" id="feed">
+    <div class="empty-state" id="emptyState">
+      <div class="icon">&#9776;</div>
+      <p>Connect to a Matrix room to see live Smithers updates</p>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/js/dashboard-app.js"></script>
+
+</body>
+</html>
