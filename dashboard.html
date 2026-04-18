@@ -98,12 +98,13 @@
     .btn.primary:hover { opacity: 0.85; }
 
     .stats-row {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
       gap: 10px; margin-bottom: 20px;
     }
     .stat-card {
       background: var(--surface); border: 1px solid var(--border);
       border-radius: 8px; padding: 12px 14px;
+      position: relative;
     }
     .stat-card .label {
       font-size: 10px; color: var(--text-dim);
@@ -111,6 +112,26 @@
     }
     .stat-card .value { font-size: 18px; font-weight: 700; margin-top: 2px; }
     .stat-card .value.small { font-size: 13px; font-weight: 400; }
+
+    /* Update flash indicator */
+    #updateFlash {
+      position: absolute; top: 6px; right: 8px;
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent); opacity: 0;
+    }
+    #updateFlash.flash {
+      animation: flashPulse 1.5s ease-out;
+    }
+    @keyframes flashPulse {
+      0% { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(3); }
+    }
+
+    /* Next update countdown */
+    .next-update {
+      font-size: 10px; color: var(--text-dim);
+      text-align: right; margin-bottom: 10px;
+    }
 
     /* Two-column layout for process + smithers panels */
     .panels-grid {
@@ -159,14 +180,21 @@
     .proc-table td {
       padding: 4px 6px;
       border-bottom: 1px solid var(--surface2);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 120px;
     }
     .proc-table tr:last-child td { border-bottom: none; }
     .proc-table td:first-child { color: var(--text-dim); }
     .proc-table td:last-child { text-align: right; color: var(--cyan); }
+    .proc-name { font-weight: 600; }
+    .proc-cmdline {
+      display: block;
+      font-size: 9px;
+      color: var(--text-dim);
+      max-width: 180px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 1px;
+    }
 
     /* Smithers workflow panel */
     .smithers-run { margin-bottom: 8px; }
@@ -219,6 +247,76 @@
       border-radius: 3px;
     }
 
+    /* Live dot indicator */
+    .live-dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: livePulse 2s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    @keyframes livePulse {
+      0%,100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0,184,148,0.4); }
+      50% { opacity: 0.6; box-shadow: 0 0 0 4px rgba(0,184,148,0); }
+    }
+
+    /* Active task detail card */
+    .active-task {
+      background: var(--surface2);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+    .active-task-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .active-task-name {
+      font-weight: 700;
+      color: var(--accent);
+      font-size: 12px;
+    }
+    .active-task-age {
+      font-size: 9px;
+      color: var(--green);
+      margin-left: auto;
+    }
+    .active-detail {
+      font-size: 11px;
+      color: var(--text);
+      margin-bottom: 3px;
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+    }
+    .active-label {
+      font-size: 9px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      letter-spacing: 0.05em;
+      min-width: 55px;
+      flex-shrink: 0;
+    }
+    .active-detail code {
+      background: var(--surface);
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 11px;
+      color: var(--cyan);
+    }
+
+    /* Telemetry message card minimal */
+    .telem-updated {
+      font-size: 10px;
+      color: var(--text-dim);
+      font-style: italic;
+      margin-top: 4px;
+    }
+
     .feed-header {
       display: flex; justify-content: space-between;
       align-items: center; margin-bottom: 10px;
@@ -262,17 +360,6 @@
     .status-badge.complete { background: rgba(0,184,148,0.15); color: var(--green); }
     .status-badge.failed { background: rgba(255,107,107,0.15); color: var(--red); }
     .status-badge.pending { background: rgba(253,203,110,0.15); color: var(--yellow); }
-
-    .telemetry-grid {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-      gap: 6px; margin-top: 8px;
-    }
-    .telem-item {
-      background: var(--surface2); border-radius: 4px;
-      padding: 6px 8px;
-    }
-    .telem-item .tl { font-size: 9px; color: var(--text-dim); text-transform: uppercase; }
-    .telem-item .tv { font-size: 14px; font-weight: 600; margin-top: 1px; }
 
     .empty-state {
       text-align: center; padding: 40px 20px; color: var(--text-dim);
@@ -332,26 +419,29 @@
       <div class="value" id="msgCount">0</div>
     </div>
     <div class="stat-card">
-      <div class="label">Last Update</div>
-      <div class="value small" id="lastUpdate">--</div>
+      <div class="label">CPU</div>
+      <div class="value" id="cpuVal">--</div>
+      <div id="updateFlash"></div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Memory</div>
+      <div class="value small" id="memVal">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Disk</div>
+      <div class="value small" id="diskVal">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Load</div>
+      <div class="value small" id="loadVal">--</div>
     </div>
     <div class="stat-card">
       <div class="label">Uptime</div>
       <div class="value small" id="uptime">--</div>
     </div>
-    <div class="stat-card" id="cpuCard">
-      <div class="label">CPU</div>
-      <div class="value" id="cpuVal">--</div>
-    </div>
-    <div class="stat-card" id="memCard">
-      <div class="label">Memory</div>
-      <div class="value" id="memVal">--</div>
-    </div>
-    <div class="stat-card" id="diskCard">
-      <div class="label">Disk</div>
-      <div class="value small" id="diskVal">--</div>
-    </div>
   </div>
+
+  <div class="next-update">next update in <span id="nextUpdate">--</span></div>
 
   <div class="panels-grid">
     <!-- Top Processes -->
