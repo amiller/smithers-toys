@@ -18,6 +18,28 @@ const hsInput = document.getElementById('homeserver');
 const roomInput = document.getElementById('roomId');
 const tokenInput = document.getElementById('accessToken');
 
+// Parse config from URL hash: #hs=...&room=...&token=...
+function parseHash() {
+  const hash = location.hash.slice(1);
+  if (!hash) return {};
+  const params = {};
+  for (const part of hash.split('&')) {
+    const [k, v] = part.split('=');
+    if (k && v) params[decodeURIComponent(k)] = decodeURIComponent(v);
+  }
+  return params;
+}
+
+const hashConfig = parseHash();
+if (hashConfig.hs) localStorage.setItem(HOMESERVER_KEY, hashConfig.hs);
+if (hashConfig.room) localStorage.setItem(ROOM_KEY, hashConfig.room);
+if (hashConfig.token) localStorage.setItem(TOKEN_KEY, hashConfig.token);
+
+// Clear the hash from the URL so the token isn't visible in history/address bar
+if (Object.keys(hashConfig).length > 0) {
+  history.replaceState(null, '', location.pathname);
+}
+
 hsInput.value = localStorage.getItem(HOMESERVER_KEY) || '';
 roomInput.value = localStorage.getItem(ROOM_KEY) || '';
 tokenInput.value = localStorage.getItem(TOKEN_KEY) || '';
@@ -244,7 +266,10 @@ function clearFeed() {
 document.getElementById('connectBtn').addEventListener('click', connect);
 document.getElementById('clearBtn').addEventListener('click', clearFeed);
 
-// Auto-connect if saved
+// Auto-connect if config is available (from hash or localStorage)
 if (hsInput.value && roomInput.value && tokenInput.value) {
   connect();
+} else {
+  // Show the config panel — no auto-connect possible
+  document.getElementById('configPanel').style.display = '';
 }
