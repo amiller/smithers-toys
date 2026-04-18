@@ -87,23 +87,11 @@ function updateStatCards(body) {
   if (t.disk) document.getElementById('diskVal').textContent = t.disk;
 }
 
-function renderMessage(event) {
+function buildMessageHtml(event) {
   const content = event.getContent ? event.getContent() : event.content;
-  if (!content || !content.body) return;
+  if (!content || !content.body) return null;
 
-  msgCount++;
-  document.getElementById('msgCount').textContent = msgCount;
-  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
-
-  updateStatCards(content.body);
-
-  const empty = document.getElementById('emptyState');
-  if (empty) empty.remove();
-
-  const card = document.createElement('div');
   const isTelemetry = content.body.includes('CVM Telemetry');
-  card.className = 'message-card' + (isTelemetry ? ' telemetry' : '');
-
   const sender = (event.getSender ? event.getSender() : event.sender) || 'unknown';
   const ts = (event.getDate ? event.getDate() : null) ||
              (event.origin_server_ts ? new Date(event.origin_server_ts) : new Date());
@@ -137,18 +125,58 @@ function renderMessage(event) {
     }
   }
 
-  card.innerHTML =
-    `<div class="meta">
-      <span class="sender">${escapeHtml(sender)}</span>
-      ${badges}
-      <span class="time">${timeStr}</span>
-    </div>
-    <div class="body">${bodyHtml}</div>
-    ${telemHtml}`;
+  return {
+    isTelemetry,
+    className: 'message-card' + (isTelemetry ? ' telemetry' : ''),
+    innerHTML:
+      `<div class="meta">
+        <span class="sender">${escapeHtml(sender)}</span>
+        ${badges}
+        <span class="time">${timeStr}</span>
+      </div>
+      <div class="body">${bodyHtml}</div>
+      ${telemHtml}`
+  };
+}
+
+function renderMessage(event) {
+  const content = event.getContent ? event.getContent() : event.content;
+  if (!content || !content.body) return;
+
+  msgCount++;
+  document.getElementById('msgCount').textContent = msgCount;
+  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+
+  updateStatCards(content.body);
+
+  const empty = document.getElementById('emptyState');
+  if (empty) empty.remove();
+
+  const parsed = buildMessageHtml(event);
+  if (!parsed) return;
 
   const feed = document.getElementById('feed');
-  feed.insertBefore(card, feed.firstChild);
-  while (feed.children.length > 100) feed.removeChild(feed.lastChild);
+
+  if (parsed.isTelemetry) {
+    // Update the single telemetry card in-place — no accumulation
+    let card = document.getElementById('telemetryLive');
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'telemetryLive';
+      feed.insertBefore(card, feed.firstChild);
+    }
+    card.className = parsed.className;
+    card.innerHTML = parsed.innerHTML;
+  } else {
+    // Non-telemetry messages stack normally, capped at 20
+    const card = document.createElement('div');
+    card.className = parsed.className;
+    card.innerHTML = parsed.innerHTML;
+    feed.insertBefore(card, feed.firstChild);
+    // Remove old non-telemetry cards beyond 20
+    const cards = feed.querySelectorAll('.message-card:not(#telemetryLive)');
+    for (let i = 20; i < cards.length; i++) cards[i].remove();
+  }
 }
 
 function startUptimeCounter() {
