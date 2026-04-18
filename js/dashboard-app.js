@@ -1,5 +1,5 @@
 // The Vite ESM bundle exports via window.MatrixSDK
-import '/js/matrix-sdk.esm.js';
+import './matrix-sdk.esm.js';
 
 // Wait for the module to set window.MatrixSDK
 const sdk = window.MatrixSDK || await new Promise((resolve) => {
