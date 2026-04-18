@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+    <title>Advanced Mandelbrot Set Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        canvas {
+            display: block;
+            touch-action: none;
+        }
+
+        #hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 12px;
+            line-height: 1.6;
+            pointer-events: none;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            max-width: 280px;
+        }
+
+        #hud h3 {
+            margin: 0 0 8px 0;
+            font-size: 14px;
+            color: #00d4ff;
+        }
+
+        #hud .stat {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        #hud .stat-label {
+            color: #aaa;
+            margin-right: 12px;
+        }
+
+        #hud .stat-value {
+            color: #fff;
+            font-family: 'Courier New', monospace;
+        }
+
+        #resetBtn {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, #00d4ff, #0088cc);
+            color: #fff;
+            border: none;
+            padding: 12px 30px;
+            font-size: 14px;
+            font-weight: bold;
+            border-radius: 25px;
+            cursor: pointer;
+            pointer-events: auto;
+            box-shadow: 0 4px 15px rgba(0, 212, 255, 0.4);
+            transition: all 0.3s ease;
+            z-index: 100;
+        }
+
+        #resetBtn:hover {
+            transform: translateX(-50%) scale(1.05);
+            box-shadow: 0 6px 20px rgba(0, 212, 255, 0.6);
+        }
+
+        #resetBtn:active {
+            transform: translateX(-50%) scale(0.95);
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-size: 16px;
+            display: none;
+            pointer-events: none;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #00d4ff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        #instructions {
+            position: absolute;
+            bottom: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 11px;
+            text-align: center;
+            pointer-events: none;
+            opacity: 0.7;
+        }
+
+        #instructions span {
+            margin: 0 8px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <canvas id="mandelbrotCanvas"></canvas>
+
+        <div id="hud">
+            <h3>Mandelbrot Set</h3>
+            <div class="stat">
+                <span class="stat-label">Zoom:</span>
+                <span class="stat-value" id="zoomValue">1.00×</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Precision:</span>
+                <span class="stat-value" id="precisionValue">Float64</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Iterations:</span>
+                <span class="stat-value" id="iterValue">200</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Center X:</span>
+                <span class="stat-value" id="centerX">-0.5</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Center Y:</span>
+                <span class="stat-value" id="centerY">0.0</span>
+            </div>
+        </div>
+
+        <button id="resetBtn">Reset View (R)</button>
+
+        <div id="loading">
+            <span class="spinner"></span>
+            Computing...
+        </div>
+
+        <div id="instructions">
+            <span>🖱️ Scroll to zoom</span>
+            <span>👆 Drag to pan</span>
+            <span>👆👆 Double-click to zoom 2x</span>
+        </div>
+    </div>
+
+    <script>
+        // Initialize state variables before use
+        const canvas = document.getElementById('mandelbrotCanvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const container = document.getElementById('container');
+
+        // Display elements
+        const zoomDisplay = document.getElementById('zoomValue');
+        const precisionDisplay = document.getElementById('precisionValue');
+        const iterDisplay = document.getElementById('iterValue');
+        const centerXDisplay = document.getElementById('centerX');
+        const centerYDisplay = document.getElementById('centerY');
+        const loadingDisplay = document.getElementById('loading');
+        const resetBtn = document.getElementById('resetBtn');
+
+        // View state
+        let centerX = -0.5;
+        let centerY = 0.0;
+        let zoom = 1.0;
+        let targetZoom = 1.0;
+        let baseIterations = 200;
+        let maxIterations = 200;
+
+        // Rendering state
+        let isRendering = false;
+        let renderTimeout = null;
+        let renderPhase = 0;
+        const maxRenderPhases = 3;
+
+        // Mouse interaction state
+        let isDragging = false;
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+
+        // Mobile gesture state machine
+        let activeTouches = new Map();
+        let touchStartTime = 0;
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let lastTapTime = 0;
+        let lastTapX = 0;
+        let lastTapY = 0;
+        let potentialTap = null;
+        const TAP_TIMEOUT = 300;
+        const TAP_MOVEMENT_THRESHOLD = 10;
+        const DOUBLE_TAP_TIMEOUT = 400;
+
+        // Precision tier thresholds
+        const PRECISION_THRESHOLDS = {
+            FLOAT64: 1e13,
+            BIGINT: 1e20
+        };
+
+        // BigInt precision scaling (fixed-point arithmetic)
+        const BIGINT_PRECISION = 50; // decimal places
+
+        // Clamp devicePixelRatio for performance
+        const devicePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+
+        // Initialize canvas
+        function initCanvas() {
+            const rect = container.getBoundingClientRect();
+            canvas.width = rect.width * devicePixelRatio;
+            canvas.height = rect.height * devicePixelRatio;
+            canvas.style.width = rect.width + 'px';
+            canvas.style.height = rect.height + 'px';
+            ctx.scale(devicePixelRatio, devicePixelRatio);
+        }
+
+        // Get current precision tier
+        function getPrecisionTier() {
+            if (zoom < PRECISION_THRESHOLDS.FLOAT64) {
+                return 'Float64';
+            } else {
+                return 'BigInt';
+            }
+        }
+
+        // Update iteration count based on zoom
+        function updateIterations() {
+            const logZoom = Math.log10(Math.max(zoom, 1));
+            maxIterations = Math.floor(baseIterations + logZoom * 50);
+            maxIterations = Math.min(maxIterations, 5000);
+        }
+
+        // Smooth coloring with continuous iteration count
+        function getColor(iterations, maxIter) {
+            if (iterations === maxIter) {
+                return [0, 0, 0]; // Black for points in the set
+            }
+
+            // Smooth iteration count
+            const smoothIter = iterations + 1 - Math.log(Math.log2(Math.abs(iterations))) / Math.log(2);
+            const normalized = smoothIter / maxIter;
+
+            // HSL to RGB conversion for smooth gradient
+            const hue = (normalized * 360 + 200) % 360;
+            const saturation = 0.8;
+            const lightness = 0.5 + 0.5 * Math.sin(normalized * Math.PI);
+
+            return hslToRgb(hue, saturation, lightness);
+        }
+
+        // HSL to RGB conversion
+        function hslToRgb(h, s, l) {
+            h /= 360;
+            let r, g, b;
+
+            if (s === 0) {
+                r = g = b = l;
+            } else {
+                const hue2rgb = (p, q, t) => {
+                    if (t < 0) t += 1;
+                    if (t > 1) t -= 1;
+                    if (t < 1/6) return p + (q - p) * 6 * t;
+                    if (t < 1/2) return q;
+                    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                    return p;
+                };
+
+                const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+                const p = 2 * l - q;
+                r = hue2rgb(p, q, h + 1/3);
+                g = hue2rgb(p, q, h);
+                b = hue2rgb(p, q, h - 1/3);
+            }
+
+            return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+        }
+
+        // Float64 Mandelbrot iteration
+        function iterateFloat64(cx, cy, maxIter) {
+            let x = 0, y = 0;
+            let x2 = 0, y2 = 0;
+            let iteration = 0;
+
+            while (x2 + y2 <= 4 && iteration < maxIter) {
+                y = 2 * x * y + cy;
+                x = x2 - y2 + cx;
+                x2 = x * x;
+                y2 = y * y;
+                iteration++;
+            }
+
+            return iteration;
+        }
+
+        // BigInt Mandelbrot iteration (fixed-point arithmetic)
+        function iterateBigInt(cx, cy, maxIter) {
+            const scale = BigInt(10) ** BigInt(BIGINT_PRECISION);
+            let x = 0n, y = 0n;
+            let x2 = 0n, y2 = 0n;
+            let iteration = 0;
+            const limit = 4n * scale * scale;
+
+            const cxBig = BigInt(Math.round(cx * Number(scale)));
+            const cyBig = BigInt(Math.round(cy * Number(scale)));
+
+            while (x2 + y2 <= limit && iteration < maxIter) {
+                y = (2n * x * y) / scale + cyBig;
+                x = x2 - y2 + cxBig;
+                x2 = (x * x) / scale;
+                y2 = (y * y) / scale;
+                iteration++;
+            }
+
+            return iteration;
+        }
+
+        // Map pixel coordinates to complex plane
+        function pixelToComplex(px, py) {
+            const rect = canvas.getBoundingClientRect();
+            const aspectRatio = rect.width / rect.height;
+
+            // Calculate view dimensions in complex plane
+            const viewHeight = 3.0 / zoom;
+            const viewWidth = viewHeight * aspectRatio;
+
+            const x = centerX + (px - rect.width / 2) * (viewWidth / rect.width);
+            const y = centerY + (py - rect.height / 2) * (viewHeight / rect.height);
+
+            return { x, y };
+        }
+
+        // Render the Mandelbrot set
+        function render(phase = 0) {
+            if (isRendering) return;
+            isRendering = true;
+
+            loadingDisplay.style.display = 'block';
+
+            // Use requestAnimationFrame to keep UI responsive
+            requestAnimationFrame(() => {
+                const rect = canvas.getBoundingClientRect();
+                const width = rect.width;
+                const height = rect.height;
+
+                // Progressive rendering: start with coarse resolution
+                const resolution = Math.pow(2, maxRenderPhases - 1 - phase);
+                const step = Math.max(1, Math.floor(resolution));
+
+                // Create image data for efficient pixel manipulation
+                const imageData = ctx.createImageData(width * devicePixelRatio, height * devicePixelRatio);
+                const data = imageData.data;
+
+                const precisionTier = getPrecisionTier();
+                const viewHeight = 3.0 / zoom;
+                const aspectRatio = width / height;
+                const viewWidth = viewHeight * aspectRatio;
+
+                // Render pixels
+                for (let py = 0; py < height; py += step) {
+                    for (let px = 0; px < width; px += step) {
+                        const coords = pixelToComplex(px, py);
+                        let iterations;
+
+                        if (precisionTier === 'Float64') {
+                            iterations = iterateFloat64(coords.x, coords.y, maxIterations);
+                        } else {
+                            iterations = iterateBigInt(coords.x, coords.y, maxIterations);
+                        }
+
+                        const color = getColor(iterations, maxIterations);
+
+                        // Fill the block of pixels
+                        for (let dy = 0; dy < step && py + dy < height; dy++) {
+                            for (let dx = 0; dx < step && px + dx < width; dx++) {
+                                const pixelX = (px + dx) * devicePixelRatio;
+                                const pixelY = (py + dy) * devicePixelRatio;
+
+                                for (let dpr = 0; dpr < devicePixelRatio; dpr++) {
+                                    for (let dpc = 0; dpc < devicePixelRatio; dpc++) {
+                                        const index = ((pixelY + dpr) * width * devicePixelRatio + (pixelX + dpc)) * 4;
+                                        data[index] = color[0];     // R
+                                        data[index + 1] = color[1]; // G
+                                        data[index + 2] = color[2]; // B
+                                        data[index + 3] = 255;      // A
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ctx.putImageData(imageData, 0, 0);
+
+                loadingDisplay.style.display = 'none';
+                isRendering = false;
+
+                // Continue progressive rendering if not at final phase
+                if (phase < maxRenderPhases - 1) {
+                    renderPhase = phase + 1;
+                    render(renderPhase);
+                }
+            });
+        }
+
+        // Trigger render with debounce
+        function scheduleRender() {
+            if (renderTimeout) {
+                clearTimeout(renderTimeout);
+            }
+
+            renderTimeout = setTimeout(() => {
+                updateIterations();
+                renderPhase = 0;
+                render(0);
+                updateHUD();
+            }, 50);
+        }
+
+        // Update HUD display
+        function updateHUD() {
+            const precision = getPrecisionTier();
+
+            // Format zoom level
+            let zoomText;
+            if (zoom >= 1e9) {
+                zoomText = `10^${Math.floor(Math.log10(zoom))}×`;
+            } else if (zoom >= 1e6) {
+                zoomText = `${(zoom / 1e6).toFixed(1)}M×`;
+            } else if (zoom >= 1e3) {
+                zoomText = `${(zoom / 1e3).toFixed(1)}K×`;
+            } else {
+                zoomText = `${zoom.toFixed(2)}×`;
+            }
+
+            zoomDisplay.textContent = zoomText;
+            precisionDisplay.textContent = precision;
+            iterDisplay.textContent = maxIterations;
+            centerXDisplay.textContent = centerX.toFixed(10);
+            centerYDisplay.textContent = centerY.toFixed(10);
+        }
+
+        // Reset to default view
+        function resetView() {
+            centerX = -0.5;
+            centerY = 0.0;
+            zoom = 1.0;
+            targetZoom = 1.0;
+            maxIterations = baseIterations;
+            scheduleRender();
+        }
+
+        // Mouse wheel zoom
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            // Get complex coordinates before zoom
+            const beforeZoom = pixelToComplex(mouseX, mouseY);
+
+            // Apply zoom
+            const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+            zoom *= zoomFactor;
+            zoom = Math.max(0.1, Math.min(zoom, 1e20));
+
+            // Adjust center to keep mouse position fixed
+            const afterZoom = pixelToComplex(mouseX, mouseY);
+            centerX += (beforeZoom.x - afterZoom.x);
+            centerY += (beforeZoom.y - afterZoom.y);
+
+            scheduleRender();
+        }, { passive: false });
+
+        // Mouse drag to pan
+        canvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+            canvas.style.cursor = 'grabbing';
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+
+            const dx = e.clientX - lastMouseX;
+            const dy = e.clientY - lastMouseY;
+
+            const rect = canvas.getBoundingClientRect();
+            const viewHeight = 3.0 / zoom;
+            const aspectRatio = rect.width / rect.height;
+            const viewWidth = viewHeight * aspectRatio;
+
+            centerX -= (dx / rect.width) * viewWidth;
+            centerY -= (dy / rect.height) * viewHeight;
+
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+
+            scheduleRender();
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            isDragging = false;
+            canvas.style.cursor = 'default';
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            isDragging = false;
+            canvas.style.cursor = 'default';
+        });
+
+        // Double-click to zoom
+        canvas.addEventListener('dblclick', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            const beforeZoom = pixelToComplex(mouseX, mouseY);
+            zoom *= 2;
+
+            const afterZoom = pixelToComplex(mouseX, mouseY);
+            centerX += (beforeZoom.x - afterZoom.x);
+            centerY += (beforeZoom.y - afterZoom.y);
+
+            scheduleRender();
+        });
+
+        // Touch handling with proper gesture state machine
+        function handleTouchStart(e) {
+            e.preventDefault();
+
+            const now = Date.now();
+
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const touch = e.changedTouches[i];
+                activeTouches.set(touch.identifier, {
+                    x: touch.clientX,
+                    y: touch.clientY,
+                    startTime: now
+                });
+            }
+
+            // Check if this could be a tap
+            if (activeTouches.size === 1) {
+                const touch = e.changedTouches[0];
+                potentialTap = {
+                    x: touch.clientX,
+                    y: touch.clientY,
+                    startTime: now,
+                    hasMoved: false
+                };
+            } else {
+                potentialTap = null;
+            }
+
+            // Cancel any pending tap recognition
+            if (window.tapTimeout) {
+                clearTimeout(window.tapTimeout);
+                window.tapTimeout = null;
+            }
+        }
+
+        function handleTouchMove(e) {
+            e.preventDefault();
+
+            const now = Date.now();
+
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const touch = e.changedTouches[i];
+                const touchData = activeTouches.get(touch.identifier);
+                if (touchData) {
+                    touchData.x = touch.clientX;
+                    touchData.y = touch.clientY;
+                }
+            }
+
+            // Check for tap movement threshold
+            if (potentialTap) {
+                const touch = e.changedTouches[0];
+                const dx = Math.abs(touch.clientX - potentialTap.x);
+                const dy = Math.abs(touch.clientY - potentialTap.y);
+
+                if (dx > TAP_MOVEMENT_THRESHOLD || dy > TAP_MOVEMENT_THRESHOLD) {
+                    potentialTap.hasMoved = true;
+                    potentialTap = null;
+                }
+            }
+
+            // Handle two-finger pinch zoom
+            if (activeTouches.size === 2) {
+                const touches = Array.from(activeTouches.values());
+                const dx = touches[1].x - touches[0].x;
+                const dy = touches[1].y - touches[0].y;
+                const currentDistance = Math.sqrt(dx * dx + dy * dy);
+
+                if (window.lastPinchDistance) {
+                    const ratio = currentDistance / window.lastPinchDistance;
+
+                    // Get center point between fingers
+                    const pinchCenterX = (touches[0].x + touches[1].x) / 2;
+                    const pinchCenterY = (touches[0].y + touches[1].y) / 2;
+
+                    const rect = canvas.getBoundingClientRect();
+                    const mouseX = pinchCenterX - rect.left;
+                    const mouseY = pinchCenterY - rect.top;
+
+                    const beforeZoom = pixelToComplex(mouseX, mouseY);
+                    zoom *= ratio;
+                    zoom = Math.max(0.1, Math.min(zoom, 1e20));
+
+                    const afterZoom = pixelToComplex(mouseX, mouseY);
+                    centerX += (beforeZoom.x - afterZoom.x);
+                    centerY += (beforeZoom.y - afterZoom.y);
+
+                    scheduleRender();
+                }
+
+                window.lastPinchDistance = currentDistance;
+                potentialTap = null;
+            }
+
+            // Handle single-finger drag
+            if (activeTouches.size === 1 && !potentialTap) {
+                const touch = Array.from(activeTouches.values())[0];
+                const prevX = touch.x;
+                const prevY = touch.y;
+
+                touch.x = e.changedTouches[0].clientX;
+                touch.y = e.changedTouches[0].clientY;
+
+                const dx = touch.x - prevX;
+                const dy = touch.y - prevY;
+
+                const rect = canvas.getBoundingClientRect();
+                const viewHeight = 3.0 / zoom;
+                const aspectRatio = rect.width / rect.height;
+                const viewWidth = viewHeight * aspectRatio;
+
+                centerX -= (dx / rect.width) * viewWidth;
+                centerY -= (dy / rect.height) * viewHeight;
+
+                scheduleRender();
+            }
+        }
+
+        function handleTouchEnd(e) {
+            e.preventDefault();
+
+            // Store current touches count BEFORE removing ended touches
+            const touchesBefore = activeTouches.size;
+
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const touch = e.changedTouches[i];
+                activeTouches.delete(touch.identifier);
+            }
+
+            const touchesAfter = activeTouches.size;
+
+            // Only consider this as a potential tap if exactly ONE touch ended
+            // and there were no other touches active before
+            if (potentialTap && touchesBefore === 1 && touchesAfter === 0 && !potentialTap.hasMoved) {
+                const now = Date.now();
+                const touchDuration = now - potentialTap.startTime;
+
+                if (touchDuration < TAP_TIMEOUT) {
+                    // This is a valid tap - check for double-tap
+                    const timeSinceLastTap = now - lastTapTime;
+                    const dx = Math.abs(potentialTap.x - lastTapX);
+                    const dy = Math.abs(potentialTap.y - lastTapY);
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (timeSinceLastTap < DOUBLE_TAP_TIMEOUT && distance < 50) {
+                        // Double-tap detected - trigger zoom
+                        const rect = canvas.getBoundingClientRect();
+                        const mouseX = potentialTap.x - rect.left;
+                        const mouseY = potentialTap.y - rect.top;
+
+                        const beforeZoom = pixelToComplex(mouseX, mouseY);
+                        zoom *= 2;
+
+                        const afterZoom = pixelToComplex(mouseX, mouseY);
+                        centerX += (beforeZoom.x - afterZoom.x);
+                        centerY += (beforeZoom.y - afterZoom.y);
+
+                        scheduleRender();
+
+                        // Reset last tap time to prevent triple-tap
+                        lastTapTime = 0;
+                    } else {
+                        // First tap - store for potential double-tap
+                        lastTapTime = now;
+                        lastTapX = potentialTap.x;
+                        lastTapY = potentialTap.y;
+                    }
+                }
+
+                potentialTap = null;
+            } else {
+                // Not a valid tap scenario
+                potentialTap = null;
+                lastTapTime = 0;
+            }
+
+            // Reset pinch tracking when both fingers are released
+            if (activeTouches.size < 2) {
+                window.lastPinchDistance = null;
+            }
+        }
+
+        // Attach touch event listeners
+        canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+        canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+        canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+        canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'r' || e.key === 'R') {
+                resetView();
+            }
+        });
+
+        // Reset button
+        resetBtn.addEventListener('click', resetView);
+
+        // Window resize handling
+        window.addEventListener('resize', () => {
+            initCanvas();
+            scheduleRender();
+        });
+
+        // Initialize
+        initCanvas();
+        updateIterations();
+        updateHUD();
+
+        // Initial render
+        setTimeout(() => {
+            render(0);
+        }, 100);
+    </script>
+</body>
+</html>
