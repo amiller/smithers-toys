@@ -18,6 +18,7 @@
       --yellow: #fdcb6e;
       --red: #ff6b6b;
       --blue: #74b9ff;
+      --cyan: #81ecec;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -110,6 +111,113 @@
     }
     .stat-card .value { font-size: 18px; font-weight: 700; margin-top: 2px; }
     .stat-card .value.small { font-size: 13px; font-weight: 400; }
+
+    /* Two-column layout for process + smithers panels */
+    .panels-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+    @media (max-width: 700px) {
+      .panels-grid { grid-template-columns: 1fr; }
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .panel-title {
+      font-size: 11px; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-dim);
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .panel-title .count {
+      font-size: 10px; color: var(--accent);
+    }
+
+    /* Process table */
+    .proc-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    .proc-table th {
+      text-align: left;
+      color: var(--text-dim);
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 2px 6px 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    .proc-table td {
+      padding: 4px 6px;
+      border-bottom: 1px solid var(--surface2);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 120px;
+    }
+    .proc-table tr:last-child td { border-bottom: none; }
+    .proc-table td:first-child { color: var(--text-dim); }
+    .proc-table td:last-child { text-align: right; color: var(--cyan); }
+
+    /* Smithers workflow panel */
+    .smithers-run { margin-bottom: 8px; }
+    .smithers-run-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+    .smithers-workflow {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+    }
+    .smithers-runtime {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .smithers-run-id {
+      font-size: 10px;
+      color: var(--text-dim);
+      margin-left: auto;
+    }
+    .smithers-nodes {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .smithers-node {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      background: var(--surface2);
+      border-radius: 4px;
+      font-size: 11px;
+    }
+    .smithers-node.running { border-left: 3px solid var(--blue); }
+    .smithers-node.complete { border-left: 3px solid var(--green); }
+    .smithers-node.failed { border-left: 3px solid var(--red); }
+    .smithers-node.pending { border-left: 3px solid var(--border); }
+    .node-id { font-weight: 600; min-width: 70px; }
+    .node-elapsed { color: var(--text-dim); font-size: 10px; }
+    .node-error {
+      color: var(--red);
+      font-size: 10px;
+      padding: 0 4px;
+      background: rgba(255,107,107,0.1);
+      border-radius: 3px;
+    }
 
     .feed-header {
       display: flex; justify-content: space-between;
@@ -242,6 +350,27 @@
     <div class="stat-card" id="diskCard">
       <div class="label">Disk</div>
       <div class="value small" id="diskVal">--</div>
+    </div>
+  </div>
+
+  <div class="panels-grid">
+    <!-- Top Processes -->
+    <div class="panel">
+      <div class="panel-title">
+        Top Processes
+        <span class="count" id="procCount">0</span>
+      </div>
+      <table class="proc-table">
+        <thead>
+          <tr><th>PID</th><th>Name</th><th>Mem</th></tr>
+        </thead>
+        <tbody id="procBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Smithers Workflow Status -->
+    <div class="panel" id="smithersPanel" style="display:none">
+      <div class="panel-title">Smithers Workflow</div>
     </div>
   </div>
 
