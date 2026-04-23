@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Penalty Kick Shootout</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            overflow: hidden;
+            background: #1a1a2e;
+            font-family: 'Arial', sans-serif;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #ui {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 14px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 15px;
+            border-radius: 8px;
+            z-index: 100;
+        }
+        #instructions {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 16px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-align: center;
+            z-index: 100;
+        }
+        #gameOver {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 24px;
+            background: rgba(0,0,0,0.9);
+            padding: 30px 50px;
+            border-radius: 15px;
+            text-align: center;
+            z-index: 100;
+            display: none;
+        }
+        #gameOver button {
+            margin-top: 20px;
+            padding: 10px 30px;
+            font-size: 18px;
+            cursor: pointer;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        #gameOver button:hover {
+            background: #45a049;
+        }
+        .score-line {
+            margin: 5px 0;
+        }
+        .current-turn {
+            color: #ffd700;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glCanvas"></canvas>
+    <div id="ui">
+        <div class="score-line">Player: <span id="playerScore">0</span> goals</div>
+        <div class="score-line">AI: <span id="aiScore">0</span> goals</div>
+        <div class="score-line">Attempt: <span id="attempt">1</span>/5</div>
+        <div class="score-line current-turn" id="turn">Your turn</div>
+    </div>
+    <div id="instructions">Move mouse to aim, click to shoot</div>
+    <div id="gameOver">
+        <div id="finalScore"></div>
+        <button onclick="restartGame()">Play Again</button>
+    </div>
+
+    <script>
+        // WebGL Penalty Kick Shootout Game
+        const canvas = document.getElementById('glCanvas');
+        const gl = canvas.getContext('webgl', { antialias: true, alpha: false });
+
+        if (!gl) {
+            alert('WebGL not supported');
+            throw new Error('WebGL not supported');
+        }
+
+        // Game state
+        const gameState = {
+            phase: 'aiming', // aiming, shooting, result, ai_turn, game_over
+            playerScore: 0,
+            aiScore: 0,
+            attempt: 1,
+            isPlayerTurn: true,
+            ballPosition: [0, 0.5, -8],
+            ballVelocity: [0, 0, 0],
+            ballInPlay: false,
+            goalkeeperPos: [0, 0, -11],
+            goalkeeperTarget: [0, 0, -11],
+            goalkeeperDiving: false,
+            goalkeeperDiveDir: [0, 0],
+            shotResult: null,
+            aimDirection: 0,
+            aimElevation: 0,
+            resultTimer: 0,
+            aiAimDirection: 0,
+            aiAimElevation: 0,
+            aiShotTimer: 0,
+            aiShootDelay: 0
+        };
+
+        // Vertex shader
+        const vertexShaderSource = `
+            attribute vec3 aPosition;
+            attribute vec3 aNormal;
+            attribute vec2 aTexCoord;
+
+            uniform mat4 uModelViewMatrix;
+            uniform mat4 uProjectionMatrix;
+            uniform mat4 uNormalMatrix;
+
+            varying vec3 vNormal;
+            varying vec3 vPosition;
+            varying vec2 vTexCoord;
+
+            void main() {
+                vec4 worldPos = uModelViewMatrix * vec4(aPosition, 1.0);
+                gl_Position = uProjectionMatrix * worldPos;
+                vPosition = worldPos.xyz;
+                vNormal = (uNormalMatrix * vec4(aNormal, 0.0)).xyz;
+                vTexCoord = aTexCoord;
+            }
+        `;
+
+        // Fragment shader
+        const fragmentShaderSource = `
+            precision mediump float;
+
+            varying vec3 vNormal;
+            varying vec3 vPosition;
+            varying vec2 vTexCoord;
+
+            uniform vec3 uLightPos;
+            uniform vec3 uLightColor;
+            uniform vec3 uAmbientColor;
+            uniform vec3 uDiffuseColor;
+            uniform vec3 uSpecularColor;
+            uniform float uShininess;
+            uniform int uUseTexture;
+            uniform sampler2D uTexture;
+
+            void main() {
+                vec3 normal = normalize(vNormal);
+                vec3 lightDir = normalize(uLightPos - vPosition);
+                vec3 viewDir = normalize(-vPosition);
+                vec3 reflectDir = reflect(-lightDir, normal);
+
+                // Ambient
+                vec3 ambient = uAmbientColor;
+
+                // Diffuse
+                float diff = max(dot(normal, lightDir), 0.0);
+                vec3 diffuse = diff * uLightColor * uDiffuseColor;
+
+                // Specular
+                float spec = pow(max(dot(viewDir, reflectDir), 0.0), uShininess);
+                vec3 specular = spec * uSpecularColor;
+
+                vec3 color = ambient + diffuse + specular;
+
+                if (uUseTexture == 1) {
+                    vec4 texColor = texture2D(uTexture, vTexCoord);
+                    color *= texColor.rgb;
+                }
+
+                gl_FragColor = vec4(color, 1.0);
+            }
+        `;
+
+        // Shader compilation
+        function compileShader(source, type) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('Shader error:', gl.getShaderInfoLog(shader));
+                return null;
+            }
+            return shader;
+        }
+
+        const vertexShader = compileShader(vertexShaderSource, gl.VERTEX_SHADER);
+        const fragmentShader = compileShader(fragmentShaderSource, gl.FRAGMENT_SHADER);
+
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            console.error('Program error:', gl.getProgramInfoLog(program));
+        }
+
+        gl.useProgram(program);
+
+        // Get attribute and uniform locations
+        const aPosition = gl.getAttribLocation(program, 'aPosition');
+        const aNormal = gl.getAttribLocation(program, 'aNormal');
+        const aTexCoord = gl.getAttribLocation(program, 'aTexCoord');
+        const uModelViewMatrix = gl.getUniformLocation(program, 'uModelViewMatrix');
+        const uProjectionMatrix = gl.getUniformLocation(program, 'uProjectionMatrix');
+        const uNormalMatrix = gl.getUniformLocation(program, 'uNormalMatrix');
+        const uLightPos = gl.getUniformLocation(program, 'uLightPos');
+        const uLightColor = gl.getUniformLocation(program, 'uLightColor');
+        const uAmbientColor = gl.getUniformLocation(program, 'uAmbientColor');
+        const uDiffuseColor = gl.getUniformLocation(program, 'uDiffuseColor');
+        const uSpecularColor = gl.getUniformLocation(program, 'uSpecularColor');
+        const uShininess = gl.getUniformLocation(program, 'uShininess');
+        const uUseTexture = gl.getUniformLocation(program, 'uUseTexture');
+        const uTexture = gl.getUniformLocation(program, 'uTexture');
+
+        // Matrix utilities
+        function mat4Create() {
+            return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+        }
+
+        function mat4Perspective(fovy, aspect, near, far) {
+            const f = 1.0 / Math.tan(fovy / 2);
+            const nf = 1 / (near - far);
+            return new Float32Array([
+                f / aspect, 0, 0, 0,
+                0, f, 0, 0,
+                0, 0, (far + near) * nf, -1,
+                0, 0, 2 * far * near * nf, 0
+            ]);
+        }
+
+        function mat4LookAt(eye, center, up) {
+            const z = normalize([eye[0]-center[0], eye[1]-center[1], eye[2]-center[2]]);
+            const x = normalize(cross(up, z));
+            const y = cross(z, x);
+            return new Float32Array([
+                x[0], y[0], z[0], 0,
+                x[1], y[1], z[1], 0,
+                x[2], y[2], z[2], 0,
+                -dot(x,eye), -dot(y,eye), -dot(z,eye), 1
+            ]);
+        }
+
+        function mat4Multiply(a, b) {
+            const result = new Float32Array(16);
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    result[i * 4 + j] =
+                        a[j] * b[i * 4] +
+                        a[4 + j] * b[i * 4 + 1] +
+                        a[8 + j] * b[i * 4 + 2] +
+                        a[12 + j] * b[i * 4 + 3];
+                }
+            }
+            return result;
+        }
+
+        function mat4Translate(m, v) {
+            const t = [1,0,0,0, 0,1,0,0, 0,0,1,0, v[0],v[1],v[2],1];
+            return mat4Multiply(m, t);
+        }
+
+        function mat4RotateY(m, angle) {
+            const c = Math.cos(angle), s = Math.sin(angle);
+            const r = [c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1];
+            return mat4Multiply(m, r);
+        }
+
+        function mat4RotateX(m, angle) {
+            const c = Math.cos(angle), s = Math.sin(angle);
+            const r = [1,0,0,0, 0,c,s,0, 0,-s,c,0, 0,0,0,1];
+            return mat4Multiply(m, r);
+        }
+
+        function mat4RotateZ(m, angle) {
+            const c = Math.cos(angle), s = Math.sin(angle);
+            const r = [c,s,0,0, -s,c,0,0, 0,0,1,0, 0,0,0,1];
+            return mat4Multiply(m, r);
+        }
+
+        function mat4Scale(m, v) {
+            const s = [v[0],0,0,0, 0,v[1],0,0, 0,0,v[2],0, 0,0,0,1];
+            return mat4Multiply(m, s);
+        }
+
+        function mat4Invert(m) {
+            const inv = new Float32Array(16);
+            inv[0] = m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
+            inv[4] = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
+            inv[8] = m[4]*m[9]*m[15] - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9];
+            inv[12] = -m[4]*m[9]*m[14] + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9];
+            inv[1] = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10];
+            inv[5] = m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10];
+            inv[9] = -m[0]*m[9]*m[15] + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9];
+            inv[13] = m[0]*m[9]*m[14] - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9];
+            inv[2] = m[1]*m[6]*m[15] - m[1]*m[7]*m[14] - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7] - m[13]*m[3]*m[6];
+            inv[6] = -m[0]*m[6]*m[15] + m[0]*m[7]*m[14] + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7] + m[12]*m[3]*m[6];
+            inv[10] = m[0]*m[5]*m[15] - m[0]*m[7]*m[13] - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7] - m[12]*m[3]*m[5];
+            inv[14] = -m[0]*m[5]*m[14] + m[0]*m[6]*m[13] + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6] + m[12]*m[2]*m[5];
+            inv[3] = -m[1]*m[6]*m[11] + m[1]*m[7]*m[10] + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7] + m[9]*m[3]*m[6];
+            inv[7] = m[0]*m[6]*m[11] - m[0]*m[7]*m[10] - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7] - m[8]*m[3]*m[6];
+            inv[11] = -m[0]*m[5]*m[11] + m[0]*m[7]*m[9] + m[4]*m[1]*m[11] - m[4]*m[3]*m[9] - m[8]*m[1]*m[7] + m[8]*m[3]*m[5];
+            inv[15] = m[0]*m[5]*m[10] - m[0]*m[6]*m[9] - m[4]*m[1]*m[10] + m[4]*m[2]*m[9] + m[8]*m[1]*m[6] - m[8]*m[2]*m[5];
+
+            let det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12];
+            if (det === 0) return mat4Create();
+            det = 1.0 / det;
+            for (let i = 0; i < 16; i++) inv[i] *= det;
+            return inv;
+        }
+
+        function mat4Transpose(m) {
+            return new Float32Array([
+                m[0], m[4], m[8], m[12],
+                m[1], m[5], m[9], m[13],
+                m[2], m[6], m[10], m[14],
+                m[3], m[7], m[11], m[15]
+            ]);
+        }
+
+        function normalize(v) {
+            const len = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+            return [v[0]/len, v[1]/len, v[2]/len];
+        }
+
+        function cross(a, b) {
+            return [
+                a[1]*b[2] - a[2]*b[1],
+                a[2]*b[0] - a[0]*b[2],
+                a[0]*b[1] - a[1]*b[0]
+            ];
+        }
+
+        function dot(a, b) {
+            return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+        }
+
+        // Geometry creation functions
+        function createBox(width, height, depth) {
+            const w = width/2, h = height/2, d = depth/2;
+            const positions = new Float32Array([
+                // Front
+                -w,-h,d,  w,-h,d,  w,h,d,  -w,h,d,
+                // Back
+                w,-h,-d,  -w,-h,-d,  -w,h,-d,  w,h,-d,
+                // Top
+                -w,h,d,  w,h,d,  w,h,-d,  -w,h,-d,
+                // Bottom
+                -w,-h,-d,  w,-h,-d,  w,-h,d,  -w,-h,d,
+                // Right
+                w,-h,d,  w,-h,-d,  w,h,-d,  w,h,d,
+                // Left
+                -w,-h,-d,  -w,-h,d,  -w,h,d,  -w,h,-d
+            ]);
+            const normals = new Float32Array([
+                0,0,1, 0,0,1, 0,0,1, 0,0,1,
+                0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1,
+                0,1,0, 0,1,0, 0,1,0, 0,1,0,
+                0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0,
+                1,0,0, 1,0,0, 1,0,0, 1,0,0,
+                -1,0,0, -1,0,0, -1,0,0, -1,0,0
+            ]);
+            const texCoords = new Float32Array([
+                0,0, 1,0, 1,1, 0,1,
+                0,0, 1,0, 1,1, 0,1,
+                0,0, 1,0, 1,1, 0,1,
+                0,0, 1,0, 1,1, 0,1,
+                0,0, 1,0, 1,1, 0,1,
+                0,0, 1,0, 1,1, 0,1
+            ]);
+            const indices = new Uint16Array([
+                0,1,2, 0,2,3,
+                4,5,6, 4,6,7,
+                8,9,10, 8,10,11,
+                12,13,14, 12,14,15,
+                16,17,18, 16,18,19,
+                20,21,22, 20,22,23
+            ]);
+            return { positions, normals, texCoords, indices };
+        }
+
+        function createCylinder(radius, height, segments) {
+            const positions = [], normals = [], texCoords = [], indices = [];
+            const h2 = height/2;
+
+            for (let i = 0; i <= segments; i++) {
+                const angle = (i / segments) * Math.PI * 2;
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+                const nx = Math.cos(angle);
+                const nz = Math.sin(angle);
+
+                positions.push(x, -h2, z, x, h2, z);
+                normals.push(nx, 0, nz, nx, 0, nz);
+                texCoords.push(i/segments, 0, i/segments, 1);
+
+                if (i < segments) {
+                    const i0 = i * 2;
+                    const i1 = i0 + 1;
+                    const i2 = i0 + 2;
+                    const i3 = i0 + 3;
+                    indices.push(i0, i1, i2, i1, i3, i2);
+                }
+            }
+
+            return {
+                positions: new Float32Array(positions),
+                normals: new Float32Array(normals),
+                texCoords: new Float32Array(texCoords),
+                indices: new Uint16Array(indices)
+            };
+        }
+
+        function createSphere(radius, segments, rings) {
+            const positions = [], normals = [], texCoords = [], indices = [];
+
+            for (let ring = 0; ring <= rings; ring++) {
+                const theta = (ring / rings) * Math.PI;
+                const sinTheta = Math.sin(theta);
+                const cosTheta = Math.cos(theta);
+
+                for (let seg = 0; seg <= segments; seg++) {
+                    const phi = (seg / segments) * Math.PI * 2;
+                    const x = Math.cos(phi) * sinTheta;
+                    const y = cosTheta;
+                    const z = Math.sin(phi) * sinTheta;
+
+                    positions.push(x * radius, y * radius, z * radius);
+                    normals.push(x, y, z);
+                    texCoords.push(seg / segments, ring / rings);
+                }
+            }
+
+            for (let ring = 0; ring < rings; ring++) {
+                for (let seg = 0; seg < segments; seg++) {
+                    const i0 = ring * (segments + 1) + seg;
+                    const i1 = i0 + 1;
+                    const i2 = i0 + segments + 1;
+                    const i3 = i2 + 1;
+                    indices.push(i0, i2, i1, i1, i2, i3);
+                }
+            }
+
+            return {
+                positions: new Float32Array(positions),
+                normals: new Float32Array(normals),
+                texCoords: new Float32Array(texCoords),
+                indices: new Uint16Array(indices)
+            };
+        }
+
+        function createPlane(width, depth) {
+            const w = width/2, d = depth/2;
+            const positions = new Float32Array([
+                -w,0,d,  w,0,d,  w,0,-d,  -w,0,-d
+            ]);
+            const normals = new Float32Array([
+                0,1,0, 0,1,0, 0,1,0, 0,1,0
+            ]);
+            const texCoords = new Float32Array([
+                0,0, 1,0, 1,1, 0,1
+            ]);
+            const indices = new Uint16Array([0,1,2, 0,2,3]);
+            return { positions, normals, texCoords, indices };
+        }
+
+        // Create all geometry buffers once
+        const geometries = {};
+        const buffers = {};
+
+        function createGeometry(name, geom) {
+            geometries[name] = geom;
+            buffers[name] = {
+                position: gl.createBuffer(),
+                normal: gl.createBuffer(),
+                texCoord: gl.createBuffer(),
+                index: gl.createBuffer()
+            };
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers[name].position);
+            gl.bufferData(gl.ARRAY_BUFFER, geom.positions, gl.STATIC_DRAW);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers[name].normal);
+            gl.bufferData(gl.ARRAY_BUFFER, geom.normals, gl.STATIC_DRAW);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers[name].texCoord);
+            gl.bufferData(gl.ARRAY_BUFFER, geom.texCoords, gl.STATIC_DRAW);
+
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers[name].index);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geom.indices, gl.STATIC_DRAW);
+
+            buffers[name].indexCount = geom.indices.length;
+        }
+
+        // Initialize all geometry
+        createGeometry('field', createPlane(30, 40));
+        createGeometry('goalPost', createCylinder(0.08, 3, 12));
+        createGeometry('crossbar', createCylinder(0.08, 7.5, 12));
+        createGeometry('ball', createSphere(0.25, 16, 12));
+        createGeometry('goalkeeperBody', createBox(0.8, 1.8, 0.4));
+        createGeometry('goalkeeperHead', createSphere(0.25, 12, 8));
+        createGeometry('goalkeeperArm', createCylinder(0.12, 0.8, 8));
+        createGeometry('goalkeeperLeg', createCylinder(0.15, 0.9, 8));
+        createGeometry('stadiumSeat', createBox(0.6, 0.4, 0.5));
+        createGeometry('net', createPlane(7.5, 2.5));
+
+        // Resize handler
+        function resize() {
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            gl.viewport(0, 0, canvas.width, canvas.height);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Input handling
+        let mouseX = 0, mouseY = 0;
+
+        function handleInput(x, y) {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = ((x - rect.left) / rect.width) * 2 - 1;
+            mouseY = -((y - rect.top) / rect.height) * 2 + 1;
+
+            if (gameState.phase === 'aiming') {
+                gameState.aimDirection = mouseX * 0.8;
+                gameState.aimElevation = Math.max(0, mouseY * 0.5 + 0.2);
+            }
+        }
+
+        canvas.addEventListener('mousemove', (e) => handleInput(e.clientX, e.clientY));
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            handleInput(e.touches[0].clientX, e.touches[0].clientY);
+        }, { passive: false });
+
+        function handleShoot() {
+            if (gameState.phase === 'aiming') {
+                shootBall();
+            }
+        }
+
+        canvas.addEventListener('click', handleShoot);
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            handleShoot();
+        }, { passive: false });
+
+        // Game logic
+        function shootBall() {
+            gameState.phase = 'shooting';
+            gameState.ballInPlay = true;
+            gameState.ballPosition = [0, 0.5, -8];
+
+            const speed = 0.35;
+            const angle = gameState.aimDirection * 0.5;
+            gameState.ballVelocity = [
+                Math.sin(angle) * speed,
+                gameState.aimElevation * speed,
+                -speed
+            ];
+
+            // Goalkeeper AI reaction
+            const reactionDelay = Math.random() * 0.15 + 0.1;
+            setTimeout(() => {
+                if (gameState.phase === 'shooting') {
+                    // Predict where ball will go
+                    const timeToGoal = 10 / speed;
+                    const targetX = gameState.ballPosition[0] + gameState.ballVelocity[0] * timeToGoal;
+                    const targetY = gameState.ballPosition[1] + gameState.ballVelocity[1] * timeToGoal;
+
+                    // Add some prediction error
+                    const error = (Math.random() - 0.5) * 1.5;
+                    gameState.goalkeeperTarget[0] = targetX + error;
+                    gameState.goalkeeperTarget[1] = Math.max(0, Math.min(2, targetY));
+                    gameState.goalkeeperDiving = true;
+
+                    if (Math.abs(targetX) > 2) {
+                        gameState.goalkeeperDiveDir[0] = Math.sign(targetX);
+                    }
+                    if (targetY > 1.2) {
+                        gameState.goalkeeperDiveDir[1] = 1;
+                    }
+                }
+            }, reactionDelay * 1000);
+        }
+
+        function checkShotResult() {
+            const ballPos = gameState.ballPosition;
+            const goalX = Math.abs(ballPos[0]);
+            const goalY = ballPos[1];
+
+            // Check if ball reached goal line
+            if (ballPos[2] < -11) {
+                gameState.ballInPlay = false;
+
+                // Check if saved by goalkeeper
+                const gkDist = Math.sqrt(
+                    Math.pow(ballPos[0] - gameState.goalkeeperPos[0], 2) +
+                    Math.pow(ballPos[1] - gameState.goalkeeperPos[1], 2)
+                );
+
+                if (gkDist < 1.0 && goalY < 2.2 && goalX < 3.5) {
+                    gameState.shotResult = 'saved';
+                } else if (goalY < 2.44 && goalX < 3.66) {
+                    gameState.shotResult = 'goal';
+                    if (gameState.isPlayerTurn) {
+                        gameState.playerScore++;
+                    } else {
+                        gameState.aiScore++;
+                    }
+                } else {
+                    gameState.shotResult = 'miss';
+                }
+
+                gameState.phase = 'result';
+                gameState.resultTimer = 2.5;
+                updateUI();
+            }
+        }
+
+        function aiShoot() {
+            gameState.phase = 'ai_turn';
+            gameState.isPlayerTurn = false;
+            gameState.aiShootDelay = 1.5;
+            updateUI();
+
+            setTimeout(() => {
+                // AI shoots - animate the ball
+                gameState.phase = 'shooting';
+                gameState.ballInPlay = true;
+                gameState.ballPosition = [0, 0.5, -8];
+
+                const angle = (Math.random() - 0.5) * 0.8;
+                const elevation = 0.25 + Math.random() * 0.45;
+                const speed = 0.33;
+
+                gameState.aiAimDirection = angle;
+                gameState.aiAimElevation = elevation;
+
+                gameState.ballVelocity = [
+                    Math.sin(angle) * speed,
+                    elevation * speed,
+                    -speed
+                ];
+
+                // Goalkeeper (player's side) reaction
+                const reactionDelay = Math.random() * 0.2 + 0.1;
+                setTimeout(() => {
+                    if (gameState.phase === 'shooting') {
+                        const timeToGoal = 10 / speed;
+                        const targetX = gameState.ballPosition[0] + gameState.ballVelocity[0] * timeToGoal;
+                        const targetY = gameState.ballPosition[1] + gameState.ballVelocity[1] * timeToGoal;
+
+                        const error = (Math.random() - 0.5) * 2.0;
+                        gameState.goalkeeperTarget[0] = targetX + error;
+                        gameState.goalkeeperTarget[1] = Math.max(0, Math.min(2, targetY));
+                        gameState.goalkeeperDiving = true;
+
+                        if (Math.abs(targetX) > 2.5) {
+                            gameState.goalkeeperDiveDir[0] = Math.sign(targetX);
+                        }
+                        if (targetY > 1.2) {
+                            gameState.goalkeeperDiveDir[1] = 1;
+                        }
+                    }
+                }, reactionDelay * 1000);
+            }, 1500);
+        }
+
+        function nextTurn() {
+            gameState.attempt++;
+            gameState.phase = 'aiming';
+            gameState.isPlayerTurn = true;
+            gameState.ballPosition = [0, 0.5, -8];
+            gameState.ballVelocity = [0, 0, 0];
+            gameState.goalkeeperPos = [0, 0, -11];
+            gameState.goalkeeperTarget = [0, 0, -11];
+            gameState.goalkeeperDiving = false;
+            gameState.goalkeeperDiveDir = [0, 0];
+            gameState.shotResult = null;
+
+            if (gameState.attempt > 5) {
+                endGame();
+            } else {
+                updateUI();
+            }
+        }
+
+        function endGame() {
+            gameState.phase = 'game_over';
+            const result = gameState.playerScore > gameState.aiScore ? 'You Win!' :
+                          gameState.playerScore < gameState.aiScore ? 'AI Wins!' : 'Draw!';
+            document.getElementById('finalScore').textContent =
+                `${result}\nPlayer: ${gameState.playerScore} - AI: ${gameState.aiScore}`;
+            document.getElementById('gameOver').style.display = 'block';
+        }
+
+        function restartGame() {
+            gameState.playerScore = 0;
+            gameState.aiScore = 0;
+            gameState.attempt = 1;
+            gameState.isPlayerTurn = true;
+            gameState.phase = 'aiming';
+            gameState.ballPosition = [0, 0.5, -8];
+            gameState.ballVelocity = [0, 0, 0];
+            gameState.goalkeeperPos = [0, 0, -11];
+            gameState.goalkeeperTarget = [0, 0, -11];
+            gameState.goalkeeperDiving = false;
+            gameState.shotResult = null;
+            document.getElementById('gameOver').style.display = 'none';
+            updateUI();
+        }
+
+        function updateUI() {
+            document.getElementById('playerScore').textContent = gameState.playerScore;
+            document.getElementById('aiScore').textContent = gameState.aiScore;
+            document.getElementById('attempt').textContent = Math.min(gameState.attempt, 5);
+
+            const turnEl = document.getElementById('turn');
+            const instEl = document.getElementById('instructions');
+
+            if (gameState.phase === 'game_over') {
+                turnEl.textContent = 'Game Over';
+                instEl.textContent = '';
+            } else if (gameState.phase === 'ai_turn') {
+                turnEl.textContent = 'AI Shooting...';
+                instEl.textContent = 'Watch the AI shoot';
+            } else if (gameState.phase === 'result') {
+                turnEl.textContent = gameState.shotResult === 'goal' ? 'GOAL!' :
+                                   gameState.shotResult === 'saved' ? 'SAVED!' : 'MISS!';
+                instEl.textContent = 'Get ready for next shot';
+            } else {
+                turnEl.textContent = 'Your Turn';
+                instEl.textContent = 'Move mouse to aim, click to shoot';
+            }
+        }
+
+        // Drawing functions
+        function drawGeometry(name, modelMatrix, material) {
+            const geom = geometries[name];
+            const buf = buffers[name];
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, buf.position);
+            gl.vertexAttribPointer(aPosition, 3, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(aPosition);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, buf.normal);
+            gl.vertexAttribPointer(aNormal, 3, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(aNormal);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, buf.texCoord);
+            gl.vertexAttribPointer(aTexCoord, 2, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(aTexCoord);
+
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf.index);
+
+            // Combine model and view matrices
+            const modelViewMatrix = mat4Multiply(window.currentViewMatrix, modelMatrix);
+            gl.uniformMatrix4fv(uModelViewMatrix, false, modelViewMatrix);
+
+            const normalMatrix = mat4Transpose(mat4Invert(modelViewMatrix));
+            gl.uniformMatrix4fv(uNormalMatrix, false, normalMatrix);
+
+            gl.uniform3fv(uLightPos, [5, 10, 5]);
+            gl.uniform3fv(uLightColor, [1, 1, 1]);
+            gl.uniform3fv(uAmbientColor, material.ambient || [0.2, 0.2, 0.2]);
+            gl.uniform3fv(uDiffuseColor, material.diffuse || [0.8, 0.8, 0.8]);
+            gl.uniform3fv(uSpecularColor, material.specular || [0.5, 0.5, 0.5]);
+            gl.uniform1f(uShininess, material.shininess || 32);
+            gl.uniform1i(uUseTexture, 0);
+
+            gl.drawElements(gl.TRIANGLES, buf.indexCount, gl.UNSIGNED_SHORT, 0);
+        }
+
+        function drawField() {
+            // Main field
+            const fieldMatrix = mat4Create();
+            drawGeometry('field', fieldMatrix, {
+                diffuse: [0.2, 0.6, 0.2],
+                ambient: [0.1, 0.3, 0.1]
+            });
+
+            // Field lines (drawn as thin boxes)
+            const lineMat = { diffuse: [1, 1, 1], ambient: [0.5, 0.5, 0.5] };
+
+            // Penalty area
+            const penaltyArea = mat4Translate(mat4Create(), [0, 0.01, -14]);
+            drawGeometry('field', mat4Scale(penaltyArea, [16.5, 1, 5.5]), lineMat);
+
+            // Goal area
+            const goalArea = mat4Translate(mat4Create(), [0, 0.01, -11.5]);
+            drawGeometry('field', mat4Scale(goalArea, [9.2, 1, 1.8]), lineMat);
+
+            // Penalty spot
+            const penaltySpot = mat4Translate(mat4Create(), [0, 0.02, -10]);
+            drawGeometry('ball', mat4Scale(penaltySpot, [0.15, 0.05, 0.15]), lineMat);
+        }
+
+        function drawGoal() {
+            const postMat = { diffuse: [0.9, 0.9, 0.9], ambient: [0.4, 0.4, 0.4] };
+
+            // Left post
+            const leftPost = mat4Translate(mat4Create(), [-3.66, 1.5, -11]);
+            drawGeometry('goalPost', mat4RotateZ(leftPost, Math.PI/2), postMat);
+
+            // Right post
+            const rightPost = mat4Translate(mat4Create(), [3.66, 1.5, -11]);
+            drawGeometry('goalPost', mat4RotateZ(rightPost, Math.PI/2), postMat);
+
+            // Crossbar
+            const crossbar = mat4Translate(mat4Create(), [0, 2.44, -11]);
+            drawGeometry('crossbar', mat4RotateX(crossbar, Math.PI/2), postMat);
+
+            // Net (back)
+            const netMat = { diffuse: [0.9, 0.9, 0.9], ambient: [0.3, 0.3, 0.3], specular: [0.1, 0.1, 0.1] };
+            const netBack = mat4Translate(mat4Create(), [0, 1.22, -12.5]);
+            drawGeometry('net', mat4RotateX(netBack, Math.PI/2), netMat);
+        }
+
+        function drawBall() {
+            let ballMatrix = mat4Translate(mat4Create(), gameState.ballPosition);
+
+            // Add spin based on velocity
+            if (gameState.ballInPlay) {
+                const spinSpeed = 0.1;
+                const spinAngle = gameState.ballPosition[0] * spinSpeed;
+                ballMatrix = mat4RotateY(ballMatrix, spinAngle);
+            }
+
+            drawGeometry('ball', ballMatrix, {
+                diffuse: [1, 1, 1],
+                ambient: [0.3, 0.3, 0.3],
+                specular: [0.8, 0.8, 0.8],
+                shininess: 64
+            });
+
+            // Draw ball pattern (simple black patches)
+            const patchMat = { diffuse: [0.1, 0.1, 0.1], ambient: [0.05, 0.05, 0.05] };
+            const patches = [
+                [0.15, 0.15, 0.15], [-0.15, 0.15, 0.15],
+                [0.15, -0.15, 0.15], [-0.15, -0.15, 0.15],
+                [0, 0, 0.2]
+            ];
+
+            patches.forEach(pos => {
+                const patchMatrix = mat4Translate(ballMatrix, pos);
+                drawGeometry('ball', mat4Scale(patchMatrix, [0.12, 0.12, 0.12]), patchMat);
+            });
+        }
+
+        function drawGoalkeeper() {
+            const gkMat = {
+                diffuse: [1, 0.2, 0.2],
+                ambient: [0.3, 0.1, 0.1],
+                specular: [0.3, 0.3, 0.3]
+            };
+
+            const gkPos = gameState.goalkeeperPos;
+            let gkMatrix = mat4Translate(mat4Create(), gkPos);
+
+            // Add dive rotation
+            if (gameState.goalkeeperDiving) {
+                const diveAngle = gameState.goalkeeperDiveDir[0] * 0.5;
+                gkMatrix = mat4RotateZ(gkMatrix, diveAngle);
+                if (gameState.goalkeeperDiveDir[1] > 0) {
+                    gkMatrix = mat4RotateX(gkMatrix, -0.3);
+                }
+            }
+
+            // Body
+            const bodyMatrix = mat4Translate(gkMatrix, [0, 0.9, 0]);
+            drawGeometry('goalkeeperBody', bodyMatrix, gkMat);
+
+            // Head
+            const headMatrix = mat4Translate(gkMatrix, [0, 2.0, 0]);
+            drawGeometry('goalkeeperHead', headMatrix, {
+                diffuse: [0.9, 0.7, 0.6],
+                ambient: [0.4, 0.3, 0.3]
+            });
+
+            // Arms
+            const armMat = { diffuse: [1, 0.2, 0.2], ambient: [0.3, 0.1, 0.1] };
+
+            // Left arm
+            let leftArmMatrix = mat4Translate(gkMatrix, [-0.5, 1.4, 0]);
+            if (gameState.goalkeeperDiving) {
+                leftArmMatrix = mat4RotateX(leftArmMatrix, -0.5);
+                leftArmMatrix = mat4RotateZ(leftArmMatrix, 0.3);
+            }
+            drawGeometry('goalkeeperArm', leftArmMatrix, armMat);
+
+            // Right arm
+            let rightArmMatrix = mat4Translate(gkMatrix, [0.5, 1.4, 0]);
+            if (gameState.goalkeeperDiving) {
+                rightArmMatrix = mat4RotateX(rightArmMatrix, -0.5);
+                rightArmMatrix = mat4RotateZ(rightArmMatrix, -0.3);
+            }
+            drawGeometry('goalkeeperArm', rightArmMatrix, armMat);
+
+            // Legs
+            const legMat = { diffuse: [0.2, 0.2, 0.8], ambient: [0.1, 0.1, 0.3] };
+
+            const leftLegMatrix = mat4Translate(gkMatrix, [-0.2, 0.45, 0]);
+            drawGeometry('goalkeeperLeg', leftLegMatrix, legMat);
+
+            const rightLegMatrix = mat4Translate(gkMatrix, [0.2, 0.45, 0]);
+            drawGeometry('goalkeeperLeg', rightLegMatrix, legMat);
+        }
+
+        function drawStadium() {
+            const seatMat = { diffuse: [0.3, 0.3, 0.4], ambient: [0.15, 0.15, 0.2] };
+
+            // Draw stadium stands in a semicircle
+            for (let row = 0; row < 5; row++) {
+                const y = 0.5 + row * 0.6;
+                const radius = 15 + row * 2;
+                const seatsInRow = Math.floor(radius * 2);
+
+                for (let i = 0; i < seatsInRow; i++) {
+                    const angle = (i / seatsInRow) * Math.PI + Math.PI/2;
+                    const x = Math.cos(angle) * radius;
+                    const z = Math.sin(angle) * radius - 10;
+
+                    if (z > -5) continue; // Don't draw behind camera
+
+                    const seatMatrix = mat4Translate(mat4Create(), [x, y, z]);
+                    const rotatedSeat = mat4RotateY(seatMatrix, angle + Math.PI/2);
+                    drawGeometry('stadiumSeat', rotatedSeat, seatMat);
+                }
+            }
+        }
+
+        function drawSky() {
+            // Simple sky gradient by clearing with sky color
+            gl.clearColor(0.4, 0.6, 0.9, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        }
+
+        // Main render loop
+        let lastTime = 0;
+        function render(time) {
+            const deltaTime = (time - lastTime) / 1000;
+            lastTime = time;
+
+            // Initialize view matrix if not set
+            if (!window.currentViewMatrix) {
+                const cameraPos = [0, 3, 2];
+                const cameraTarget = [0, 1, -8];
+                const cameraUp = [0, 1, 0];
+                window.currentViewMatrix = mat4LookAt(cameraPos, cameraTarget, cameraUp);
+            }
+
+            // Update physics
+            if (gameState.ballInPlay) {
+                gameState.ballPosition[0] += gameState.ballVelocity[0];
+                gameState.ballPosition[1] += gameState.ballVelocity[1];
+                gameState.ballPosition[2] += gameState.ballVelocity[2];
+
+                // Gravity
+                gameState.ballVelocity[1] -= 0.008;
+
+                checkShotResult();
+            }
+
+            // Update goalkeeper
+            if (gameState.goalkeeperDiving) {
+                const speed = 0.15;
+                gameState.goalkeeperPos[0] += (gameState.goalkeeperTarget[0] - gameState.goalkeeperPos[0]) * speed * deltaTime * 60;
+                gameState.goalkeeperPos[1] += (gameState.goalkeeperTarget[1] - gameState.goalkeeperPos[1]) * speed * deltaTime * 60;
+            } else {
+                // Slight movement when not diving
+                gameState.goalkeeperPos[0] = Math.sin(time * 0.001) * 0.5;
+            }
+
+            // Handle result timer
+            if (gameState.phase === 'result') {
+                gameState.resultTimer -= deltaTime;
+                if (gameState.resultTimer <= 0) {
+                    if (gameState.isPlayerTurn) {
+                        // Player just finished, now AI's turn
+                        aiShoot();
+                    } else {
+                        // AI just finished, go to next player turn or end game
+                        if (gameState.attempt >= 5) {
+                            endGame();
+                        } else {
+                            nextTurn();
+                        }
+                    }
+                }
+            }
+
+            // Draw sky
+            drawSky();
+
+            // Set up camera
+            const aspect = canvas.width / canvas.height;
+            const projectionMatrix = mat4Perspective(Math.PI / 4, aspect, 0.1, 100);
+            gl.uniformMatrix4fv(uProjectionMatrix, false, projectionMatrix);
+
+            const cameraPos = [0, 3, 2];
+            const cameraTarget = [0, 1, -8];
+            const cameraUp = [0, 1, 0];
+            const viewMatrix = mat4LookAt(cameraPos, cameraTarget, cameraUp);
+
+            // Enable depth testing
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+
+            // Draw scene (pass view matrix as global for all draw calls)
+            window.currentViewMatrix = viewMatrix;
+            drawField();
+            drawGoal();
+            drawStadium();
+            drawGoalkeeper();
+            drawBall();
+
+            requestAnimationFrame(render);
+        }
+
+        // Start game
+        updateUI();
+        requestAnimationFrame(render);
+    </script>
+</body>
+</html>
