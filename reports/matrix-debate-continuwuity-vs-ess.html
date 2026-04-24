@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smithers Debate — Continuwuity vs ESS Community</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0a;color:#d0d0d0;font-family:'IBM Plex Mono',monospace,system-ui;max-width:52em;margin:0 auto;padding:2em 1.5em;line-height:1.7}
+h1{font-size:1.6rem;font-weight:400;letter-spacing:.08em;color:#00d2a0;margin-bottom:.3em}
+h2{font-size:1.15rem;font-weight:500;color:#00d2a0;margin:1.8em 0 .5em;letter-spacing:.05em;border-bottom:1px solid #1a3a30;padding-bottom:.3em}
+h3{font-size:.95rem;font-weight:500;color:#7ec8b0;margin:1.2em 0 .4em}
+p{margin:.4em 0}
+.tag{display:inline-block;font-size:.7rem;letter-spacing:.1em;padding:.2em .6em;border-radius:3px;margin-right:.4em;text-transform:uppercase;font-weight:500}
+.tag-proposer{background:#1a3a2a;color:#4ae0a0}
+.tag-opponent{background:#3a2a1a;color:#e0a04a}
+.tag-judge{background:#2a2a3a;color:#a0a0e0}
+.tag-winner{background:#0a3a2a;color:#00ffa8;border:1px solid #00d2a0}
+.score{font-size:2rem;font-weight:300;letter-spacing:.15em;margin:.8em 0}
+.score-proposer{color:#4ae0a0}
+.score-opponent{color:#e0a04a}
+.arg-card{background:#111;border:1px solid #1a2a22;border-radius:6px;padding:1em 1.2em;margin:.8em 0}
+.arg-card h3{margin-top:0}
+.arg-card ul{margin:.3em 0 .3em 1.2em}
+.arg-card li{margin:.2em 0;color:#b0b0b0}
+.evidence{color:#666;font-size:.8rem;margin-top:.5em;font-style:italic}
+.verdict-box{background:#0d1a14;border:1px solid #00d2a0;border-radius:8px;padding:1.5em;margin:1.5em 0}
+.insight{color:#00ffa8;font-size:.95rem;margin:.8em 0;padding:.8em;background:#0a1510;border-left:3px solid #00d2a0}
+.rec{background:#111822;border-left:3px solid #4a7ac8;padding:.8em 1em;margin:.8em 0;border-radius:0 4px 4px 0}
+.meta{color:#555;font-size:.75rem;letter-spacing:.05em;margin-top:2em}
+a{color:#00d2a0;text-decoration:none}
+a:hover{text-decoration:underline}
+.badge{display:inline-block;font-size:.65rem;background:#1a1a1a;border:1px solid #333;border-radius:3px;padding:.1em .5em;margin-left:.4em;color:#888}
+</style>
+</head>
+<body>
+
+<h1>⚕ Debate: Continuwuity vs ESS Community</h1>
+<p style="color:#666;font-size:.8rem;letter-spacing:.05em">Smithers Debate Component · 2 rounds + judge verdict · 12.5 min · Sonnet 4 via ZAI</p>
+
+<p><span class="tag tag-proposer">PROPOSER</span> Argues FOR Continuwuity (lightweight Rust server)<br>
+<span class="tag tag-opponent">OPPONENT</span> Argues FOR ESS Community Edition (Synapse-based, Kubernetes)</p>
+
+<p style="margin-top:1em;color:#888;font-size:.85rem">Topic: Which Matrix homeserver should the Shape Rotator cohort deploy? ~20-50 crypto/TEE researchers on modest hardware (2-4 cores, 8-16GB RAM). Must federate with matrix.org. Limited admin time — prefer "set it and forget it."</p>
+
+<h2>Round 1</h2>
+
+<div class="arg-card">
+<h3><span class="tag tag-proposer">Proposer</span> Continuwuity</h3>
+<p><strong>Position:</strong> Continuwuity is the better choice for modest hardware, limited admin time, and a 20-50 user research cohort.</p>
+<ul>
+<li>Single Rust binary + RocksDB = ~500MB DB, negligible RAM/CPU on 2-4 core VPS</li>
+<li>One TOML config file, no Kubernetes, no PostgreSQL — true "set it and forget it"</li>
+<li>Privacy-focused defaults: federated presence off by default, CIDR denylist for outbound requests</li>
+<li>E2EE with cross-signing, key backup, dehydrated devices (MSC3814)</li>
+<li>Appservice protocol for bridging to Discord/Telegram via mautrix</li>
+<li>MatrixRTC support for VoIP via external LiveKit</li>
+</ul>
+<p class="evidence">Source: Comparison report Section 3 — "community reports cite ~500 MB of DB and barely noticeable RAM/CPU"</p>
+</div>
+
+<div class="arg-card">
+<h3><span class="tag tag-opponent">Opponent</span> ESS Community</h3>
+<p><strong>Position:</strong> ESS Community Edition provides a complete, battle-tested stack with bundled services.</p>
+<ul>
+<li>Bundled Element Call + LiveKit SFU — video calling works out of the box, no separate deployment</li>
+<li>MAS provides full OIDC/SSO with Keycloak, Dex, etc.</li>
+<li>Synapse = reference homeserver, best Matrix spec compliance</li>
+<li>Hookshot bundled for integrations since 26.1.1</li>
+<li>Element Admin web console for user/room management</li>
+</ul>
+<p class="evidence">Source: Comparison report Section 1 — "Matrix 2.0 (OIDC-native, Simplified Sliding Sync, Element Call) — Full for ESS"</p>
+</div>
+
+<h2>Round 2 — Rebuttals</h2>
+
+<div class="arg-card">
+<h3><span class="tag tag-proposer">Proposer</span> Rebuttal</h3>
+<ul>
+<li>ESS Community's Kubernetes requirement creates disproportionate complexity for a single VPS — Continuwuity runs standalone</li>
+<li>ESS's "2 CPU / 2 GB RAM minimum" is just for the stack itself, leaving no headroom for actual traffic on a shared VPS</li>
+<li>External LiveKit is a one-time setup; the team has TEE and crypto expertise — not a barrier</li>
+</ul>
+</div>
+
+<div class="arg-card">
+<h3><span class="tag tag-opponent">Opponent</span> Rebuttal</h3>
+<ul>
+<li>Continuwuity lacks native OIDC — only legacy auth (LDAP, reCAPTCHA, registration tokens)</li>
+<li>No bundled bridges — each mautrix bridge is a separate deploy/maintain cycle</li>
+<li>ESS Community's Helm chart automates updates and scaling; Continuwuity has no horizontal scale-out story at all</li>
+<li>For 20-50 users, ESS's resource requirements are manageable even on modest hardware</li>
+</ul>
+</div>
+
+<h2>Verdict</h2>
+
+<div class="verdict-box">
+<p><span class="tag tag-winner">WINNER: PROPOSER</span> <span class="badge">Continuwuity</span></p>
+<div class="score">
+<span class="score-proposer">8</span> <span style="color:#333;font-size:1.2rem">—</span> <span class="score-opponent">6</span>
+</div>
+
+<div class="insight">
+"The 'set it and forget it' requirement combined with modest hardware makes Kubernetes fundamentally wrong-headed. Continuwuity's single-binary architecture aligns perfectly with the constraints; ESS Community forces distributed system complexity that the use case cannot justify."
+</div>
+
+<h3>Reasoning</h3>
+<p>Continuwuity aligns perfectly with the constraints: single Rust binary designed for modest hardware (~500MB DB, negligible RAM/CPU), single TOML config file for true "set it and forget it" administration, no Kubernetes or PostgreSQL complexity, reliable federation with proper controls, full E2EE support including dehydrated devices.</p>
+
+<div class="rec">
+<strong>Recommendation:</strong> Deploy Continuwuity using Docker or systemd for process management. Configure federation and appservice bridges (mautrix-discord, mautrix-telegram) as separate containers. If group video calls become essential, deploy LiveKit + lk-jwt-service alongside. This minimizes admin burden while maximizing resilience.
+</div>
+</div>
+
+<p class="meta">
+Generated by Smithers Debate component (v0.16.9) · Claude Sonnet 4 via ZAI · 2 rounds · Run ID: run-1776988506866<br>
+Source report: <a href="https://github.com/amiller/smithers-toys/blob/main/reports/matrix-compare-continuwuity-vs-ess.md">Continuwuity vs ESS Feature Comparison</a>
+</p>
+
+</body>
+</html>
