@@ -13,12 +13,12 @@
 <body>
 <canvas id="c"></canvas>
 <script>
-// ── Warp Tunnel — raymarched kaleidoscopic hyperspace ──
+// ── Warp Tunnel — kaleidoscopic hyperspace ──
 const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
 
 if (!gl) {
-    document.body.innerHTML = '<p style="color:#fff;text-align:center;margin-top:40vh;font-family:sans-serif">WebGL not supported 😢</p>';
+    document.body.innerHTML = '<p style="color:#fff;text-align:center;margin-top:40vh;font-family:sans-serif">WebGL not supported</p>';
     throw new Error('No WebGL');
 }
 
@@ -37,91 +37,32 @@ uniform vec2  u_mouse;
 
 #define PI 3.14159265359
 
-// ── Noise helpers ──
 mat2 rot2(float a) { float c=cos(a),s=sin(a); return mat2(c,-s,s,c); }
 
-float hash(vec3 p) {
-    p = fract(p * vec3(443.8975, 397.2973, 491.1871));
-    p += dot(p, p.yxz + 19.19);
-    return fract((p.x + p.y) * p.z);
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
 
-float noise(vec3 p) {
-    vec3 i = floor(p);
-    vec3 f = fract(p);
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
     f = f*f*(3.0-2.0*f);
-    return mix(
-        mix(mix(hash(i+vec3(0,0,0)),hash(i+vec3(1,0,0)),f.x),
-            mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),
-        mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),
-            mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),
-        f.z
-    );
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-float fbm(vec3 p) {
+float fbm(vec2 p) {
     float v = 0.0, a = 0.5;
-    for (int i = 0; i < 4; i++) {
+    mat2 m = mat2(0.8, 0.6, -0.6, 0.8);
+    for (int i = 0; i < 5; i++) {
         v += a * noise(p);
-        p *= 2.02;
+        p = m * p * 2.0;
         a *= 0.5;
     }
     return v;
-}
-
-// ── Kaleidoscope fold ──
-vec3 kaleidoscope(vec3 p, float fold) {
-    float a = PI / fold;
-    float n = floor(atan(p.z, p.x) / a + 0.5);
-    a = atan(p.z, p.x) - n * a;
-    p.xz = vec2(cos(a), sin(a)) * length(p.xz);
-    return p;
-}
-
-// ── Signed distance for the tunnel ──
-float tunnelSDF(vec3 p) {
-    float t = u_time * 0.35;
-
-    // Kaleidoscope fold in XZ
-    p = kaleidoscope(p, 6.0);
-
-    // Bend space over time
-    p.xz *= rot2(sin(t * 0.4) * 0.6);
-    p.xy *= rot2(cos(t * 0.3) * 0.4);
-
-    // Noisy tunnel displacement
-    float n = fbm(p * 0.8 + t * 0.5);
-
-    // Cylinder distance
-    float d = length(p.xy) - (0.9 + 0.35 * sin(p.z * 1.5 + t * 2.0) + 0.15 * n);
-
-    // Ridge rings
-    float rings = sin(p.z * 8.0 - t * 4.0);
-    d -= 0.06 * smoothstep(0.7, 1.0, rings);
-
-    return d;
-}
-
-// ── Raymarching ──
-float march(vec3 ro, vec3 rd) {
-    float t = 0.0;
-    for (int i = 0; i < 80; i++) {
-        vec3 p = ro + rd * t;
-        float d = tunnelSDF(p);
-        if (d < 0.001 || t > 50.0) break;
-        t += d * 0.7;
-    }
-    return t;
-}
-
-// ── Normal via gradient ──
-vec3 calcNormal(vec3 p) {
-    vec2 e = vec2(0.002, 0.0);
-    return normalize(vec3(
-        tunnelSDF(p+e.xyy) - tunnelSDF(p-e.xyy),
-        tunnelSDF(p+e.yxy) - tunnelSDF(p-e.yxy),
-        tunnelSDF(p+e.yyx) - tunnelSDF(p-e.yyx)
-    ));
 }
 
 // ── Palette ──
@@ -135,60 +76,67 @@ vec3 palette(float t) {
 
 void main() {
     vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y;
-
     float t = u_time;
 
-    // Mouse influence: subtle camera rotation
+    // Mouse influence
     vec2 m = (u_mouse - 0.5) * 2.0;
 
-    // Camera — flying down the Z axis
-    vec3 ro = vec3(0.0, 0.0, t * 3.0);
-    ro.xy += sin(vec2(t*0.2, t*0.17)) * 0.4;
+    // ── Infinite tunnel via polar coords ──
+    float angle = atan(uv.y, uv.x);
+    float radius = length(uv);
 
-    // Look direction influenced by mouse
-    vec3 rd = normalize(vec3(uv + m * 0.15, 1.5));
-    rd.xz *= rot2(m.x * 0.3);
-    rd.yz *= rot2(m.y * 0.3);
+    // Kaleidoscope: fold the angle
+    float folds = 6.0;
+    float segAngle = PI * 2.0 / folds;
+    angle = mod(angle, segAngle);
+    angle = abs(angle - segAngle * 0.5);
 
-    // March
-    float dist = march(ro, rd);
-    vec3 col = vec3(0.0);
+    // Tunnel depth from radius
+    float z = 0.5 / (radius + 0.001);
 
-    if (dist < 50.0) {
-        vec3 p = ro + rd * dist;
-        vec3 n = calcNormal(p);
+    // Scrolling tunnel
+    z += t * 2.5;
 
-        // Color from palette based on position and depth
-        float hue = p.z * 0.15 + length(p.xy) * 0.6 + t * 0.2;
-        vec3 baseCol = palette(hue);
+    // Distort with fbm noise
+    vec2 tunnelUV = vec2(angle * 3.0, z * 1.5);
+    float n = fbm(tunnelUV + t * 0.3);
+    float n2 = fbm(tunnelUV * 2.0 - t * 0.5 + 10.0);
 
-        // Lighting
-        vec3 lightDir = normalize(vec3(0.3, 0.5, 1.0));
-        float diff = max(dot(n, lightDir), 0.0);
-        float spec = pow(max(dot(reflect(-lightDir, n), -rd), 0.0), 32.0);
+    // Warped coordinates for color
+    vec2 warped = vec2(angle * 2.0 + n * 0.5, z * 0.8 + n2 * 0.3);
+    warped += m * 0.2;
 
-        // Fresnel glow
-        float fresnel = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+    vec3 col = palette(warped.x * 0.5 + warped.y * 0.3 + t * 0.1);
 
-        col = baseCol * (diff * 0.6 + 0.4);
-        col += spec * 0.5 * vec3(1.0, 0.9, 0.8);
-        col += fresnel * 0.4 * palette(hue + 0.3);
+    // Tunnel wall shading — brighter at edges, darker in center
+    float wallShade = smoothstep(0.0, 0.8, radius);
+    col *= wallShade;
 
-        // Fog fade
-        float fog = exp(-dist * 0.06);
-        col *= fog;
+    // Depth fog — fade far away
+    float depthFade = smoothstep(0.0, 0.4, radius);
+    col *= depthFade;
 
-        // Rim glow rings
-        float ring = smoothstep(0.0, 0.05, abs(sin(p.z * 8.0 - t * 4.0)));
-        col += (1.0 - ring) * 0.15 * vec3(1.0, 0.6, 0.2);
-    }
+    // Bright ridges along the tunnel
+    float ridges = sin(z * 10.0 + n * 6.0) * 0.5 + 0.5;
+    ridges = pow(ridges, 8.0);
+    col += ridges * 0.3 * vec3(1.0, 0.6, 0.2);
 
-    // Background glow
-    float bg = 0.015 / (length(uv) + 0.15);
-    col += bg * palette(t * 0.1) * 0.5;
+    // Glow rings
+    float rings = sin(z * 4.0 - t * 3.0);
+    float ringGlow = smoothstep(0.9, 1.0, rings) * smoothstep(0.5, 0.0, radius);
+    col += ringGlow * 0.8 * palette(t * 0.15 + 0.5);
+
+    // Central glow
+    float centerGlow = 0.04 / (radius + 0.05);
+    col += centerGlow * palette(t * 0.1) * 0.4;
+
+    // Energy veins
+    float veins = abs(sin(angle * 12.0 + z * 2.0 + t));
+    veins = smoothstep(0.95, 1.0, veins);
+    col += veins * 0.15 * vec3(0.3, 0.8, 1.0) * wallShade;
 
     // Vignette
-    float vig = 1.0 - 0.5 * length((gl_FragCoord.xy / u_resolution - 0.5));
+    float vig = 1.0 - 0.4 * length(uv);
     col *= vig;
 
     // Tone mapping
@@ -205,7 +153,7 @@ function createShader(type, src) {
     gl.shaderSource(s, src);
     gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-        console.error(gl.getShaderInfoLog(s));
+        console.error('Shader error:', gl.getShaderInfoLog(s));
         return null;
     }
     return s;
@@ -219,7 +167,7 @@ gl.attachShader(prog, fs);
 gl.linkProgram(prog);
 
 if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-    console.error(gl.getProgramInfoLog(prog));
+    console.error('Link error:', gl.getProgramInfoLog(prog));
 }
 
 gl.useProgram(prog);
@@ -259,7 +207,7 @@ window.addEventListener('touchmove', e => {
 
 // ── Resize ──
 function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2); // cap DPR for perf
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     canvas.width  = canvas.clientWidth  * dpr;
     canvas.height = canvas.clientHeight * dpr;
     gl.viewport(0, 0, canvas.width, canvas.height);
